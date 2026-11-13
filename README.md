@@ -13,3 +13,5 @@ dev-sop 是一个 ZCode 插件：规格驱动开发 SOP 门禁，在任何代码
 ## 详细文档
 
 见 [plugins/dev-sop/README.md](plugins/dev-sop/README.md)。
+
+License: GPL-3.0

@@ -1,6 +1,7 @@
 {
   "name": "dev-sop",
   "version": "1.0.0",
+  "license": "GPL-3.0",
   "description": "Development SOP gate: clarifying interview, web research, approved spec and TDD before any code edit",
   "author": { "name": "AISkill" },
   "skills": "./skills",
