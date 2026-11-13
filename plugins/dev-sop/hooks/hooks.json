@@ -1,0 +1,57 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|ApplyPatch|Agent|Task",
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/gate.js"],
+            "timeoutMs": 10000,
+            "statusMessage": "Dev SOP: checking for approved spec"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/test-guard.js"],
+            "timeoutMs": 10000,
+            "statusMessage": "Dev SOP: test budget check"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/accept-check.js"],
+            "timeoutMs": 10000,
+            "statusMessage": "Dev SOP: checking UI acceptance report"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "(开发|编写|写一个|做一个|实现|新增|build|create|implement|develop)",
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/inject.js"],
+            "timeoutMs": 10000,
+            "statusMessage": "Dev SOP: injecting workflow rules"
+          }
+        ]
+      }
+    ]
+  }
+}
