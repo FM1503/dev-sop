@@ -37,7 +37,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ### 阶段 3：产出规格文档（用 spec-templates 骨架）
 
-写 `docs/specs/<slug>.md`（frontmatter 必须第 1 行起：status/slug/date/review；批准前必填 `code-files`，纯文档任务写 `code-files: none`）：先按任务类型复制 `references/spec-templates/` 对应模板（cli-tool / web-ui / lvgl）再填充，禁止现编结构；正文五要素：需求规格 / 调研结论与来源 / 技术方案 / 测试计划(TDD) / 验收 checklist；用户批准后 `status: draft` → `status: approved` 解锁代码门禁。细则：stages-detail.md 第 4 节；呈现与批准方式见第 10 节。
+写 `docs/specs/<slug>.md`（frontmatter 必须第 1 行起：status/slug/date/review；批准前必填 `code-files`（纯 UI 任务用 `ui-files`，二者至少其一），纯文档任务写 `code-files: none`）：先按任务类型复制 `references/spec-templates/` 对应模板（cli-tool / web-ui / lvgl）再填充，禁止现编结构；正文五要素：需求规格 / 调研结论与来源 / 技术方案 / 测试计划(TDD) / 验收 checklist；用户批准后 `status: draft` → `status: approved` 解锁代码门禁。细则：stages-detail.md 第 4 节；呈现与批准方式见第 10 节。
 
 ### 阶段 3.2：UI 规格（任务涉及界面时必做）
 
