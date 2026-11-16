@@ -5,10 +5,17 @@
 //     大小写不敏感；纯文档（.md）与报告类 .json 不算编码。
 //   hasExecPlanReference：prompt 引用 docs/tasks/<slug>-exec.md（执行书）或
 //     docs/changes/<slug>.md（变更单，其改动清单表同样文本级精确，视为执行书载体）
-//     或显式标记 exec-plan: exempt。
+//     或显式标记 exec-plan: exempt（v1.5.1 第二轮 P2-1 根治：行首锚定整行精确
+//     匹配 /^exec-plan:\s*exempt$/m，标记须独立成行；句中引用/行尾多余文字不触发）。
+//   isAcceptanceDelegation（v1.5.1 审查修复 P1-1/P1-2）：prompt 引用验收报告输出
+//     路径 docs/(specs|changes)/<...>.(review|ui|test)-report.json → 验收类委派，
+//     豁免执行书要求。
 //   放行条件链（gate.js Agent/Task 分支，docs 引用前提下）：无 docs 引用 → deny
 //     （AGENT_DENY_REASON，回归）；有 docs 引用且有执行书引用/豁免标记 → 放行；
-//     否则编码类 → deny（编码委派必须附执行书…），非编码类 → 维持现状放行。
+//     验收类委派（v1.5.1，置于编码判定之前）→ 放行；否则编码类 → deny（编码委派
+//     必须附执行书…），非编码类 → 维持现状放行。
+//   v1.5.1 P2-4：另含 3 个 main() 端到端用例（spawn 真实 hook 喂 stdin JSON，
+//     断言 exit code 与 permissionDecisionReason，锁定判定顺序与拒绝原因接线）。
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -16,6 +23,7 @@ const assert = require('node:assert');
 const {
   isCodingDelegation,
   hasExecPlanReference,
+  isAcceptanceDelegation,
   referencesDocsPath,
 } = require('../hooks/gate.js');
 
@@ -96,17 +104,17 @@ test('hasExecPlanReference：反斜杠变更单 docs\\changes\\fix.md → true',
   assert.strictEqual(hasExecPlanReference('按 docs\\changes\\fix.md 执行'), true);
 });
 
-test('hasExecPlanReference：显式标记 exec-plan: exempt → true', () => {
+test('hasExecPlanReference：显式标记 exec-plan: exempt 独立成行 → true', () => {
   assert.strictEqual(
-    hasExecPlanReference('非编码任务，exec-plan: exempt，请直接执行'),
+    hasExecPlanReference('非编码任务。\nexec-plan: exempt\n请直接执行'),
     true
   );
 });
 
-test('hasExecPlanReference：豁免标记大小写与空格宽容（EXEC-PLAN: EXEMPT / exec-plan:exempt / 多空格）→ true', () => {
-  assert.strictEqual(hasExecPlanReference('用户已豁免 EXEC-PLAN: EXEMPT'), true);
-  assert.strictEqual(hasExecPlanReference('exec-plan:exempt'), true);
-  assert.strictEqual(hasExecPlanReference('exec-plan:   exempt'), true);
+test('hasExecPlanReference：整行内空格宽容（exec-plan:exempt / 多空格）→ true；大写变体不匹配（正则按规格无 i 标志）', () => {
+  assert.strictEqual(hasExecPlanReference('exec-plan:exempt'), true); // 单行 prompt 串首串尾
+  assert.strictEqual(hasExecPlanReference('exec-plan:   exempt'), true); // 冒号后多空格仍整行
+  assert.strictEqual(hasExecPlanReference('EXEC-PLAN: EXEMPT'), false);
 });
 
 // ---- hasExecPlanReference：负例（正则边界）----
@@ -163,4 +171,251 @@ test('放行链：纯文档委派（只提 .md）无执行书 → 非编码不�
 test('放行链：无 docs 引用（回归）→ referencesDocsPath=false（gate 应 deny AGENT_DENY_REASON）', () => {
   const prompt = '直接修改 src/app.js 增加功能';
   assert.strictEqual(referencesDocsPath(prompt), false);
+});
+
+// ---- v1.5.1 审查修复 P1-1/P1-2：isAcceptanceDelegation 验收类委派判定 ----
+
+test('isAcceptanceDelegation：引用 docs/specs/x.review-report.json 输出路径 → true', () => {
+  assert.strictEqual(
+    isAcceptanceDelegation('报告输出 docs/specs/exec-plan.review-report.json，verdict 按 reviewer 规则'),
+    true
+  );
+});
+
+test('isAcceptanceDelegation：docs/changes/ 下的 review-report 输出路径 → true（S/M 快审报告）', () => {
+  assert.strictEqual(
+    isAcceptanceDelegation('快审报告写入 docs/changes/fix-typo.review-report.json'),
+    true
+  );
+});
+
+test('isAcceptanceDelegation：ui-report 与 test-report 输出路径 → true（UI 闭环 / 测试产出委派）', () => {
+  assert.strictEqual(
+    isAcceptanceDelegation('分析带 --out docs/specs/dashboard-ui.ui-report.json，直至 error=0'),
+    true
+  );
+  assert.strictEqual(
+    isAcceptanceDelegation('验收测试报告写入 docs/specs/todo-app.test-report.json'),
+    true
+  );
+});
+
+test('isAcceptanceDelegation：反斜杠与子目录路径 → true', () => {
+  assert.strictEqual(isAcceptanceDelegation('输出 docs\\specs\\sub\\todo.review-report.json'), true);
+  assert.strictEqual(isAcceptanceDelegation('输出 docs/changes/sub/fix.ui-report.json'), true);
+});
+
+// v1.5.1 第二轮修复 P2-2：字符类补 \u4e00-\u9fa5，中文 slug 报告路径不再漏判
+test('isAcceptanceDelegation：中文 slug 报告路径（正斜杠，docs/specs 与 docs/changes）→ true', () => {
+  assert.strictEqual(
+    isAcceptanceDelegation('报告输出 docs/specs/登录模块.review-report.json'),
+    true
+  );
+  assert.strictEqual(
+    isAcceptanceDelegation('快审报告写入 docs/changes/修复typo.ui-report.json'),
+    true
+  );
+});
+
+test('isAcceptanceDelegation：中文 slug + 反斜杠子目录路径 → true', () => {
+  assert.strictEqual(
+    isAcceptanceDelegation('报告输出 docs\\specs\\中文看板\\测试验收.test-report.json'),
+    true
+  );
+});
+
+test('isAcceptanceDelegation：负例——非 .json 报告路径 / 非 specs|changes 目录 / 普通报告词 → false', () => {
+  assert.strictEqual(isAcceptanceDelegation('报告写 docs/specs/x.review-report.md'), false); // 非 .json
+  assert.strictEqual(isAcceptanceDelegation('报告写 docs/other/x.review-report.json'), false); // 目录不符
+  assert.strictEqual(isAcceptanceDelegation('写报告 review-report，不涉路径'), false); // 无路径
+});
+
+test('isAcceptanceDelegation：空串 / null → false', () => {
+  assert.strictEqual(isAcceptanceDelegation(''), false);
+  assert.strictEqual(isAcceptanceDelegation(null), false);
+});
+
+test('验收链：reviewer 委派带 .js 改动清单 + review-report 输出路径 → 验收类豁免（gate 应放行，不因 .js 误拦）', () => {
+  const prompt =
+    '按 docs/tasks/exec-plan.md 与 docs/specs/exec-plan.md 四维审查；改动文件清单：hooks/gate.js、' +
+    'test/exec-plan.test.js、docs/workflow.html（均修改）；diff 获取：git diff HEAD~1..HEAD；' +
+    '报告输出 docs/specs/exec-plan.review-report.json';
+  assert.strictEqual(referencesDocsPath(prompt), true);
+  assert.strictEqual(hasExecPlanReference(prompt), false);
+  assert.strictEqual(isCodingDelegation(prompt), true); // 含 .js/.html → 编码类
+  assert.strictEqual(isAcceptanceDelegation(prompt), true); // → 验收类豁免，置于编码判定之前 → 放行
+});
+
+test('验收链：UI 闭环委派含 ui-analyzer.mjs 脚本 + ui-report.json 输出 → 验收类豁免（gate 应放行）', () => {
+  const prompt =
+    '按 docs/tasks/dashboard-ui.md 与 docs/specs/dashboard-ui.md 执行量化验收自动闭环：' +
+    '用 <安装目录>/hooks/ui-collect.js 与 <安装目录>/hooks/ui-analyzer.mjs 采集分析，' +
+    '采集→分析→修复→复测直至 error=0，报告落盘 --out docs/specs/dashboard-ui.ui-report.json';
+  assert.strictEqual(referencesDocsPath(prompt), true);
+  assert.strictEqual(hasExecPlanReference(prompt), false);
+  assert.strictEqual(isCodingDelegation(prompt), true); // 含 .js/.mjs → 编码类
+  assert.strictEqual(isAcceptanceDelegation(prompt), true); // → 验收类豁免 → 放行
+});
+
+test('验收链：纯编码委派无任何验收报告路径 → 无豁免（仍应 deny 编码缺执行书）', () => {
+  const prompt = '按 docs/tasks/todo.md 任务书修改 src/app.js 与 src/util.ts，产出汇总说明';
+  assert.strictEqual(referencesDocsPath(prompt), true);
+  assert.strictEqual(hasExecPlanReference(prompt), false);
+  assert.strictEqual(isAcceptanceDelegation(prompt), false);
+  assert.strictEqual(isCodingDelegation(prompt), true); // → gate 应 deny（EXEC_PLAN_DENY_REASON）
+});
+
+// ---- v1.5.1 第二轮修复 P2-1（根治）：豁免标记行首锚定整行精确匹配 ----
+
+test('豁免行锚定：独立成行（多行 prompt 中整行精确匹配）→ hasExecPlanReference=true', () => {
+  assert.strictEqual(
+    hasExecPlanReference('按 docs/tasks/todo.md 执行调研。\nexec-plan: exempt\n请直接开始'),
+    true
+  );
+  assert.strictEqual(hasExecPlanReference('exec-plan:exempt'), true); // 单行 prompt 串首串尾
+  assert.strictEqual(hasExecPlanReference('exec-plan:   exempt'), true); // 冒号后多空格仍整行
+});
+
+test('豁免行锚定：句中引用（deny 原文式嵌句）不触发 → hasExecPlanReference=false', () => {
+  // gate deny 原文中该串嵌在句中、不独立成行——引用/转述拒绝原文不会再被误判为声明豁免
+  assert.strictEqual(hasExecPlanReference('非编码任务，exec-plan: exempt，请直接执行'), false);
+  assert.strictEqual(
+    hasExecPlanReference('或声明 exec-plan: exempt（仅限非编码任务或用户明确豁免）；勘探由主会话亲自完成'),
+    false
+  );
+});
+
+test('豁免行锚定：行尾带多余文字不触发 → hasExecPlanReference=false', () => {
+  assert.strictEqual(hasExecPlanReference('exec-plan: exempt（用户已批准）'), false);
+  assert.strictEqual(hasExecPlanReference('exec-plan: exempt 已由用户批准'), false);
+});
+
+test('豁免行锚定：前缀粘连 / 大写变体不触发（回归）→ hasExecPlanReference=false', () => {
+  assert.strictEqual(hasExecPlanReference('已办理 2exec-plan: exempt 手续'), false);
+  assert.strictEqual(hasExecPlanReference('标记 my-exec-plan: exempt 无效'), false);
+  assert.strictEqual(hasExecPlanReference('EXEC-PLAN: EXEMPT'), false); // 规格正则无 i 标志
+});
+
+// ---- v1.5.1 审查修复 P2-4：main() 端到端接线（spawn 真实 hook，喂 stdin JSON）----
+
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+
+const GATE_JS = path.join(__dirname, '..', 'hooks', 'gate.js');
+const PLUGIN_DIR = path.join(__dirname, '..');
+
+// 端到端跑真实 gate.js：Agent 工具 + prompt → { status, stdout }
+function runGate(prompt) {
+  const payload = { tool_name: 'Agent', tool_input: { prompt } };
+  return spawnSync(process.execPath, [GATE_JS], {
+    input: JSON.stringify(payload),
+    cwd: PLUGIN_DIR,
+    env: Object.assign({}, process.env, { ZCODE_PROJECT_DIR: PLUGIN_DIR }),
+    timeout: 20000,
+    encoding: 'utf8',
+  });
+}
+
+test('main() e2e：验收类委派（reviewer 形态：.js 清单 + review-report 路径）→ exit 0 放行且无 deny 输出', () => {
+  const r = runGate(
+    '按 docs/tasks/exec-plan.md 与 docs/specs/exec-plan.md 审查；改动文件清单：hooks/gate.js、' +
+    'test/exec-plan.test.js；diff 获取：git diff HEAD~1..HEAD；报告输出 docs/specs/exec-plan.review-report.json'
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), ''); // 放行时不产生 deny JSON
+});
+
+test('main() e2e：编码委派无执行书（仅任务书引用）→ exit 2，deny reason 含执行书要求与验收豁免句', () => {
+  const r = runGate('按 docs/tasks/todo.md 任务书修改 src/app.js');
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('编码委派必须附执行书'),
+    'deny reason 须含执行书要求原文'
+  );
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('验收类委派'),
+    'deny reason 须含验收类自动豁免说明句'
+  );
+});
+
+test('main() e2e：豁免标记词边界——粘连 2exec-plan: exempt 不生效 → 编码委派仍 exit 2 deny', () => {
+  const r = runGate('按 docs/tasks/todo.md 修改 src/app.js（提示语里的 2exec-plan: exempt 是粘连词，不算豁免）');
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+// ---- v1.5.1 第二轮回归：gate Agent 分支判定矩阵 9 项复跑（spawn 真实 hook）----
+
+const GATE_MATRIX = [
+  {
+    name: '1/ 无 docs 引用（含代码文件）→ deny AGENT_DENY_REASON',
+    prompt: '直接修改 src/app.js 增加功能',
+    exit: 2,
+    reason: '委派任务前请先走 /spec 流程',
+  },
+  {
+    name: '2/ docs 引用+执行书 → allow',
+    prompt: '按 docs/tasks/todo.md 与执行书 docs/tasks/todo-exec.md 修改 src/app.js',
+    exit: 0,
+  },
+  {
+    name: '3/ docs 引用+变更单 → allow',
+    prompt: '按 docs/changes/fix-typo.md 变更单修改 src/app.js',
+    exit: 0,
+  },
+  {
+    name: '4/ docs 引用+豁免标记独立成行 → allow',
+    prompt: '按 docs/tasks/todo.md 执行调研汇总，标记如下：\nexec-plan: exempt',
+    exit: 0,
+  },
+  {
+    name: '5/ docs 引用+验收报告路径 → allow（验收类豁免，置于编码判定之前）',
+    prompt:
+      '按 docs/tasks/exec-plan.md 审查改动清单 hooks/gate.js，报告输出 docs/specs/exec-plan.review-report.json',
+    exit: 0,
+  },
+  {
+    name: '6/ docs 引用+编码+无执行书/豁免/验收 → deny EXEC_PLAN_DENY_REASON',
+    prompt: '按 docs/tasks/todo.md 任务书修改 src/app.js',
+    exit: 2,
+    reason: '编码委派必须附执行书',
+  },
+  {
+    name: '7/ docs 引用+非编码（纯 .md）→ allow（维持现状放行）',
+    prompt: '阅读 docs/tasks/todo.md，校对 README.md 文案',
+    exit: 0,
+  },
+  {
+    name: '8/ docs 引用+豁免标记嵌在句中（deny 原文引用）→ deny（P2-1 根治）',
+    prompt:
+      '按 docs/tasks/todo.md 修改 src/app.js（上次拒绝理由是"或声明 exec-plan: exempt（仅限非编码任务或用户明确豁免）"，此处仅为引用）',
+    exit: 2,
+    reason: '编码委派必须附执行书',
+  },
+  {
+    name: '9/ docs 引用+中文 slug 验收报告路径 → allow（P2-2 中文 slug 补齐）',
+    prompt:
+      '按 docs/tasks/执行书核对.md 审查改动 hooks/gate.js，报告输出 docs/specs/登录模块.review-report.json',
+    exit: 0,
+  },
+];
+
+test('gate 矩阵 9 项复跑：Agent 分支全判定链（放行/拦截与拒绝原因接线一致）', () => {
+  for (const item of GATE_MATRIX) {
+    const r = runGate(item.prompt);
+    assert.strictEqual(r.status, item.exit, item.name);
+    if (item.exit === 2) {
+      const out = JSON.parse(r.stdout.trim());
+      assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny', item.name);
+      assert.ok(
+        out.hookSpecificOutput.permissionDecisionReason.includes(item.reason),
+        item.name + '：deny reason 须含 "' + item.reason + '"'
+      );
+    } else {
+      assert.strictEqual(r.stdout.trim(), '', item.name + '：放行时不产生 deny JSON');
+    }
+  }
 });
