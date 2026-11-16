@@ -4,6 +4,9 @@
 //   gate.js：docs/changes/*.md frontmatter 含 status: approved（10 行容错）→ 解锁写入
 //   （reason: approved change note found）；docs/changes/ 白名单；Agent 正则扩为
 //   docs/(specs|tasks|changes)/[\w\-\/\u4e00-\u9fa5]+\.md。
+//   审查修复（review-report P1/P2-1/P2-2）：解锁收紧为 status: approved 且
+//   tier∈{S,M}（均行首锚定 ^status:、^tier:，防 "review-status: approved" 子串）
+//   且 changed-files 字段存在、值非空；docs/specs|changes 白名单仅 .md/.json。
 //   accept-check.js：变更单 tier S/M 且 approved 且 changed-files 任一存在 →
 //   review-report verdict∈{pass,pass-with-issues}；M 另要求单条 test-report
 //   （records≥1 全 pass）；mtime 最近 5 个变更单全为 tier S → 5-consecutive-S-hint。
@@ -16,6 +19,8 @@ const path = require('node:path');
 
 const {
   findApprovedChangeNote,
+  hasApprovedSpec,
+  hasWireframeApprovedSpec,
   referencesDocsPath,
   isWhitelisted,
 } = require('../hooks/gate.js');
@@ -118,6 +123,143 @@ test('findApprovedChangeNote：目录不存在 / 非 .md 文件 → null', () =>
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+// ---- gate.js：findApprovedChangeNote（审查修复 P1：解锁条件收紧）----
+
+test('findApprovedChangeNote：tier: L 的 approved 变更单 → 不解锁（引导走 docs/specs 全量）', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'big-refactor.md', [
+    'slug: big-refactor',
+    'status: approved',
+    'date: 2026-11-16',
+    'tier: L',
+    'changed-files: src/a.js, src/b.js, src/c.js',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：缺 tier 字段 → 不解锁', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'no-tier.md', [
+    'slug: no-tier',
+    'status: approved',
+    'date: 2026-11-16',
+    'changed-files: src/a.js',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：缺 changed-files 字段 → 不解锁', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'no-files.md', [
+    'slug: no-files',
+    'status: approved',
+    'date: 2026-11-16',
+    'tier: S',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：changed-files 有字段但值为空 → 不解锁', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'empty-files.md', [
+    'slug: empty-files',
+    'status: approved',
+    'tier: S',
+    'changed-files:',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：tier S + changed-files 非空 → 解锁（返回该文件）', () => {
+  const root = tempProject();
+  const note = writeChangeNote(root, 'tiny-fix.md', [
+    'slug: tiny-fix',
+    'status: approved',
+    'date: 2026-11-16',
+    'tier: S',
+    'changed-files: "src/a.js"',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), note);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：tier M + changed-files 非空（大小写归一 m）→ 解锁', () => {
+  const root = tempProject();
+  const note = writeChangeNote(root, 'mid.md', [
+    'slug: mid',
+    'status: approved',
+    'tier: m',
+    'changed-files: src/a.js, src/b.js',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), note);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// ---- gate.js：findApprovedChangeNote / hasApprovedSpec（审查修复 P2-2：行首锚定）----
+
+test('findApprovedChangeNote：frontmatter 含 "review-status: approved" 子串而无独立 status 行 → 不解锁', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'substring.md', [
+    'slug: substring',
+    'review-status: approved',
+    'tier: S',
+    'changed-files: src/a.js',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('findApprovedChangeNote：status: approved-pending → 不解锁（取值边界）', () => {
+  const root = tempProject();
+  writeChangeNote(root, 'pending.md', [
+    'slug: pending',
+    'status: approved-pending',
+    'tier: S',
+    'changed-files: src/a.js',
+  ]);
+  assert.strictEqual(findApprovedChangeNote(root), null);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('hasApprovedSpec：spec 含 "review-status: approved" 子串 → 不识别（行首锚定回归）', () => {
+  const root = tempProject();
+  const specsDir = path.join(root, 'docs', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(specsDir, 'sub.md'),
+    '---\nslug: sub\nreview-status: approved\n---\n# 规格\n',
+    'utf8'
+  );
+  assert.strictEqual(hasApprovedSpec(root), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// ---- gate.js：hasWireframeApprovedSpec（增量快审遗留 P2：行首锚定同步收紧）----
+
+test('hasWireframeApprovedSpec：spec 含 "xwireframe: approved" 子串 → 不解锁 UI 写入（行首锚定）', () => {
+  const root = tempProject();
+  const specsDir = path.join(root, 'docs', 'specs');
+  fs.mkdirSync(specsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(specsDir, 'sub.md'),
+    '---\nslug: sub\nstatus: approved\nxwireframe: approved\n---\n# 规格\n',
+    'utf8'
+  );
+  assert.strictEqual(hasWireframeApprovedSpec(root), false);
+  // 对照：独立 wireframe: approved 行 → 仍识别（收紧未过度拦截）
+  fs.writeFileSync(
+    path.join(specsDir, 'ok.md'),
+    '---\nslug: ok\nstatus: approved\nwireframe: approved\n---\n# 规格\n',
+    'utf8'
+  );
+  assert.strictEqual(hasWireframeApprovedSpec(root), true);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 // ---- gate.js：referencesDocsPath（Agent 委派正则）----
 
 test('referencesDocsPath：引用 docs/changes/c.md → 放行（v1.4.0 新增）', () => {
@@ -149,6 +291,16 @@ test('isWhitelisted：docs/changes/x.md → 白名单放行（同 docs/specs 待
   assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'changes', 'x.md'), root, 'docs/changes/x.md'), true);
   assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'specs', 'x.md'), root, 'docs/specs/x.md'), true);
   assert.strictEqual(isWhitelisted(path.join(root, 'src', 'a.js'), root, 'src/a.js'), false);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('isWhitelisted（审查修复 P2-1）：docs/changes/x.html 不再白名单放行（继续走 UI 门禁）', () => {
+  const root = tempProject();
+  assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'changes', 'x.html'), root, 'docs/changes/x.html'), false);
+  assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'specs', 'x.html'), root, 'docs/specs/x.html'), false);
+  // .md/.json 仍放行（报告类文件）
+  assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'changes', 'x.json'), root, 'docs/changes/x.json'), true);
+  assert.strictEqual(isWhitelisted(path.join(root, 'docs', 'specs', 'x.md'), root, 'docs/specs/x.md'), true);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

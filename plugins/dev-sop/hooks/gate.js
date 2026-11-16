@@ -86,9 +86,13 @@ function isWhitelisted(absFile, projectRoot, originalPath) {
   const segments = normalized.split('/').filter(Boolean);
   const base = path.basename(normalized);
 
-  // docs/specs/ 与 docs/changes/（变更单）at any level
-  for (let i = 0; i < segments.length - 1; i++) {
-    if (segments[i] === 'docs' && (segments[i + 1] === 'specs' || segments[i + 1] === 'changes')) return true;
+  // docs/specs/ 与 docs/changes/（变更单）at any level：仅 .md/.json 文档文件放行
+  // （审查修复 P2-1：其他扩展名如 .html 不再白名单放行，继续走后续门禁判定）
+  const docsExt = path.extname(base).toLowerCase();
+  if (docsExt === '.md' || docsExt === '.json') {
+    for (let i = 0; i < segments.length - 1; i++) {
+      if (segments[i] === 'docs' && (segments[i + 1] === 'specs' || segments[i + 1] === 'changes')) return true;
+    }
   }
 
   // any path segment containing test / tests / __tests__
@@ -104,9 +108,13 @@ function isWhitelisted(absFile, projectRoot, originalPath) {
   return false;
 }
 
-// 通用目录扫描：dir 下任一 .md 的 frontmatter（10 行容错）命中 markerRe → 返回该文件
-// 绝对路径，否则返回 null。供 docs/specs 与 docs/changes（变更单）共用。
-function scanFrontmatterDir(dirPath, markerRe) {
+// 通用目录扫描：dir 下任一 .md 的 frontmatter（10 行容错）命中 markerRe（或满足
+// predicate 函数）→ 返回该文件绝对路径，否则返回 null。供 docs/specs 与
+// docs/changes（变更单）共用。
+function scanFrontmatterDir(dirPath, markerReOrPredicate) {
+  const matchFrontmatter = typeof markerReOrPredicate === 'function'
+    ? markerReOrPredicate
+    : (fm) => markerReOrPredicate.test(fm);
   if (!existsSyncSafe(dirPath)) return null;
   let entries;
   try {
@@ -145,7 +153,7 @@ function scanFrontmatterDir(dirPath, markerRe) {
     }
     if (end === -1) continue;
     const frontmatter = head.slice(start + 1, end).join('\n');
-    if (markerRe.test(frontmatter)) return path.join(dirPath, entry.name);
+    if (matchFrontmatter(frontmatter)) return path.join(dirPath, entry.name);
   }
   return null;
 }
@@ -154,21 +162,39 @@ function scanSpecFrontmatter(projectRoot, markerRe) {
   return scanFrontmatterDir(path.join(projectRoot, 'docs', 'specs'), markerRe) !== null;
 }
 
+// 行首锚定（审查修复 P2-2）：与 accept-check.js 侧 frontmatterField 解析宽松度一致，
+// 防 "review-status: approved"、"status: approved-pending" 等子串误识别。
 function hasApprovedSpec(projectRoot) {
-  return scanSpecFrontmatter(projectRoot, /status\s*:\s*["']?approved["']?/i);
+  return scanSpecFrontmatter(projectRoot, /^status\s*:\s*["']?approved["']?\s*$/mi);
 }
 
+// 行首锚定（增量快审遗留 P2）：与上方 status / tier 一致的 mi 锚定风格，
+// 防 "xwireframe: approved"、"wireframe: approved-pending" 等子串/取值边界误识别。
 function hasWireframeApprovedSpec(projectRoot) {
-  return scanSpecFrontmatter(projectRoot, /wireframe\s*:\s*["']?approved["']?/i);
+  return scanSpecFrontmatter(projectRoot, /^wireframe\s*:\s*["']?approved["']?\s*$/mi);
 }
 
-// 变更单解锁（v1.4.0 分级路由）：docs/changes/*.md 任一 frontmatter 含
-// status: approved（10 行容错）→ 返回该变更单路径，否则 null。
+// frontmatter 逗号分隔文件列表（去成对引号与空白，过滤空串），与 accept-check.js
+// parseFileList 同语义
+function splitFileListValue(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean);
+}
+
+// 变更单解锁（v1.4.0 分级路由，审查修复 P1/P2-2 收紧）：docs/changes/*.md 任一
+// frontmatter（10 行容错）须同时满足 status: approved、tier∈{S,M}（大小写不敏感，
+// 均行首锚定）且 changed-files 字段存在、值非空 → 返回该变更单路径，否则 null；
+// tier: L / 缺 tier / 缺 changed-files 的变更单不解锁（引导走 docs/specs 全量流程）。
 function findApprovedChangeNote(projectRoot) {
-  return scanFrontmatterDir(
-    path.join(projectRoot, 'docs', 'changes'),
-    /status\s*:\s*["']?approved["']?/i
-  );
+  return scanFrontmatterDir(path.join(projectRoot, 'docs', 'changes'), (fm) => {
+    if (!/^status\s*:\s*["']?approved["']?\s*$/mi.test(fm)) return false;
+    if (!/^tier\s*:\s*["']?[sm]["']?\s*$/mi.test(fm)) return false;
+    const filesRaw = fm.match(/^changed-files\s*:\s*(.+)$/mi);
+    if (!filesRaw) return false;
+    return splitFileListValue(filesRaw[1]).length > 0;
+  });
 }
 
 const UI_FILE_EXT_RE = /\.(html?|css|scss|vue|jsx|tsx)$/i;
