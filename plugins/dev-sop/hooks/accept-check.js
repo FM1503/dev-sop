@@ -12,8 +12,10 @@
 //    否则 block。
 // 3) 检测 docs/specs/*.md frontmatter 含 review: required 的 spec（exempt/none/缺省
 //    均不触发）：若 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规，
-//    则强制要求 docs/specs/<slug>.review-report.json 存在、JSON 合法且 verdict=pass，
-//    否则 block（第五把钥匙）。
+//    则强制要求 docs/specs/<slug>.review-report.json 存在、JSON 合法且 verdict 为
+//    pass 或 pass-with-issues（fail/未知取值/缺失/非法 JSON 均 block；
+//    pass-with-issues 须主会话已向用户呈报问题清单并经确认定稿，见 SKILL 阶段 4.5）
+//    （第五把钥匙）。
 
 const fs = require('fs');
 const os = require('os');
@@ -320,7 +322,10 @@ function effectiveReportVerdict(report) {
   return 'fail';
 }
 
-// 校验 <slug>.review-report.json，返回 null 表示通过，否则返回中文失败原因
+// 校验 <slug>.review-report.json，返回 null 表示通过，否则返回中文失败原因。
+// 放行：verdict 为 pass 或 pass-with-issues（pass-with-issues 需主会话已向用户
+// 呈报问题清单并经用户确认定稿，见 SKILL 阶段 4.5）；
+// 阻断：verdict 为 fail、未知取值/缺 verdict 字段、报告缺失或非法 JSON。
 function checkReviewReport(reportPath) {
   if (!existsSyncSafe(reportPath)) {
     return '缺少代码审查报告 ' + reportPath;
@@ -331,12 +336,13 @@ function checkReviewReport(reportPath) {
   } catch (e) {
     return '代码审查报告不是合法 JSON：' + reportPath;
   }
-  if (effectiveReportVerdict(report) !== 'pass') {
+  const verdict = effectiveReportVerdict(report);
+  if (verdict !== 'pass' && verdict !== 'pass-with-issues') {
     const raw =
       report && typeof report === 'object' && !Array.isArray(report) && typeof report.verdict === 'string'
         ? report.verdict
         : '缺失';
-    return '代码审查报告 verdict=' + raw + '（必须为 pass）：' + reportPath;
+    return '代码审查报告 verdict=' + raw + '（必须为 pass 或 pass-with-issues，pass-with-issues 需用户确认定稿）：' + reportPath;
   }
   return null;
 }
@@ -482,7 +488,8 @@ async function main() {
       return block(
         'spec "' + spec.slug + '" 已声明 review: required 且量化验收已通过，但独立代码审查未通过（' + failure + '）。' +
         '必须：按 SKILL 阶段 4.5 委派 reviewer 子代理（插件内置，独立上下文、只读）对照任务书做四维审查，' +
-        '报告写入 docs/specs/' + spec.slug + '.review-report.json 且 verdict=pass 后方可交付；' +
+        '报告写入 docs/specs/' + spec.slug + '.review-report.json 且 verdict 为 pass 或 pass-with-issues' +
+        '（后者须先向用户呈报问题清单并经确认）后方可交付；' +
         '纯文档/微小任务可在 spec frontmatter 显式声明 review: exempt 豁免。'
       );
     }

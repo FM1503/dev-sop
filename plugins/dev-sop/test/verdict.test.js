@@ -3,13 +3,20 @@
 // 规则来源：docs/specs/code-review.md 2.1 判定规则
 //   任何 P0 → fail；P1 ≥ 3 → fail；仅 P2 或 P1 ≤ 2 → pass-with-issues；全清 → pass。
 //   报告级：缺 verdict 字段 / 非法输入 → 按 fail 处理（accept-check 第五把钥匙据此阻断）。
+//   第五把钥匙放行规则（v1.1.1 规格修订）：checkReviewReport 对 verdict 为 pass 或
+//   pass-with-issues 的报告放行（pass-with-issues 需主会话经用户确认定稿）；
+//   fail/未知取值/缺 verdict/报告缺失/非法 JSON 均阻断。
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   computeVerdictFromIssues,
   effectiveReportVerdict,
+  checkReviewReport,
 } = require('../hooks/accept-check.js');
 
 function issue(severity) {
@@ -95,4 +102,47 @@ test('非法输入（null/字符串/数字/数组）→ 按 fail 处理', () => 
   assert.strictEqual(effectiveReportVerdict('pass'), 'fail');
   assert.strictEqual(effectiveReportVerdict(42), 'fail');
   assert.strictEqual(effectiveReportVerdict([{ verdict: 'pass' }]), 'fail');
+});
+
+// ---- checkReviewReport：第五把钥匙放行/阻断（v1.1.1 规格修订：pass-with-issues 放行）----
+
+function writeTempReviewReport(report) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-sop-verdict-'));
+  const file = path.join(dir, 'review-report.json');
+  fs.writeFileSync(file, JSON.stringify(report), 'utf8');
+  return file;
+}
+
+function cleanupTempReviewReport(file) {
+  fs.rmSync(path.dirname(file), { recursive: true, force: true });
+}
+
+test('checkReviewReport：报告 verdict=pass-with-issues → 放行（返回 null）', () => {
+  const file = writeTempReviewReport({
+    verdict: 'pass-with-issues',
+    issues: [{ severity: 'P2', file: 'a.js', line: 1, dim: '测试', desc: 'x', suggestion: 'y' }],
+    summary: { p0: 0, p1: 0, p2: 1, checked: [] },
+  });
+  assert.strictEqual(checkReviewReport(file), null);
+  cleanupTempReviewReport(file);
+});
+
+test('checkReviewReport：报告 verdict=fail → 阻断（返回原因，含 verdict=fail）', () => {
+  const file = writeTempReviewReport({
+    verdict: 'fail',
+    issues: [],
+    summary: { p0: 0, p1: 0, p2: 0, checked: [] },
+  });
+  const reason = checkReviewReport(file);
+  assert.ok(typeof reason === 'string' && reason.includes('verdict=fail'));
+  assert.ok(reason.includes('必须为 pass 或 pass-with-issues'));
+  cleanupTempReviewReport(file);
+});
+
+test('checkReviewReport：报告 verdict 未知值 → 阻断（按 fail 处理）', () => {
+  const file = writeTempReviewReport({ verdict: 'ok', issues: [], summary: {} });
+  const reason = checkReviewReport(file);
+  assert.ok(typeof reason === 'string' && reason.includes('verdict=ok'));
+  assert.ok(reason.includes('必须为 pass 或 pass-with-issues'));
+  cleanupTempReviewReport(file);
 });

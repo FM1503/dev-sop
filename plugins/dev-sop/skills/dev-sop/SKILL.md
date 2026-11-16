@@ -74,8 +74,11 @@ frontmatter 必须是（**必须位于文件第 1 行**，`---` 之前不得有�
 status: draft
 slug: <slug>
 date: <YYYY-MM-DD>
+review: required
 ---
 ```
+
+其中 `review: required` 为新项目默认值：交付前必须经独立代码审查（阶段 4.5）；纯文档/微小任务可改为 `review: exempt`，存量 spec 不写该字段则完全不受影响。
 
 必填 frontmatter 字段（批准前必填；与 UI 任务的 `ui-files` 并列）：
 
@@ -202,9 +205,9 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 1. **前置就绪**：code-worker 完成实现并自审通过（阶段 4 全部完成，验收测试报告/量化验收报告合规）；
 2. **委派 reviewer**：主会话用 Agent 工具委派 reviewer 子代理，委派 prompt 必须提供四项：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、目标文件清单、报告输出路径（`docs/specs/<slug>.review-report.json`）；
 3. **回读报告**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告；
-4. **修复**：verdict 为 `fail` 或 `pass-with-issues` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；
-5. **重审（最多 2 轮）**：修复后重新委派 reviewer 审查（新报告覆盖旧报告）；最多 2 轮修复重审，仍未 `pass` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；
-6. **用户确认**：verdict 为 `pass` 后，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）。
+4. **修复（仅 fail 触发修复循环）**：verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；
+5. **重审（最多 2 轮）**：`fail` 修复后重新委派 reviewer 审查（新报告覆盖旧报告）；最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；
+6. **用户确认**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**，经用户确认后方可定稿——不强制进入修复循环。
 
 审查报告结构（`docs/specs/<slug>.review-report.json`）：
 
@@ -222,7 +225,7 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 **spec frontmatter `review` 字段说明：**
 
-- `review: required`：声明该 spec 交付必须经独立审查通过。当其 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规时，Stop 钩子（`hooks/accept-check.js`，第五把钥匙）强制校验 `docs/specs/<slug>.review-report.json` 存在、JSON 合法且 `verdict=pass`，否则无法结束交付（`pass-with-issues`/`fail`/报告缺失/非法 JSON 均阻断）。新项目 spec 默认加 `review: required`。
+- `review: required`：声明该 spec 交付必须经独立审查。当其 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规时，Stop 钩子（`hooks/accept-check.js`，第五把钥匙）强制校验 `docs/specs/<slug>.review-report.json` 存在、JSON 合法且 `verdict` 为 `pass` 或 `pass-with-issues`，否则无法结束交付（`fail`/未知取值/报告缺失/非法 JSON 均阻断；`pass-with-issues` 须经第 6 步向用户呈报问题清单并经确认后定稿）。新项目 spec 默认加 `review: required`（阶段 3 模板已内置该行）。
 - `review: exempt`：纯文档/微小任务可显式声明豁免，视为无审查要求。
 - 存量 spec 不写 `review` 字段则完全不受影响。
 

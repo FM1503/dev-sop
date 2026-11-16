@@ -1,4 +1,4 @@
-# dev-sop：开发 SOP 门禁
+# dev-sop：开发 SOP 门禁（v1.1.1）
 
 让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。
 
@@ -19,13 +19,13 @@
 | `wireframe: approved` | spec frontmatter | UI 文件（.html/.css/.vue/.jsx/.tsx 及 LVGL .c 等）的写入 |
 | `<slug>.ui-report.json` | docs/specs/ | UI 任务的交付（Stop 钩子校验全部 error=0） |
 | `<slug>.test-report.json` | docs/specs/ | 代码任务的交付（Stop 钩子校验 records 全 pass、failed=0） |
-| `<slug>.review-report.json` | docs/specs/ | `review: required` 任务的交付（Stop 钩子校验 verdict=pass） |
+| `<slug>.review-report.json` | docs/specs/ | `review: required` 任务的交付（Stop 钩子校验 verdict 为 pass 或 pass-with-issues，后者须经用户呈报确认定稿；fail/缺失/非法 JSON 阻断） |
 
 配合三道软机制：
 
 - **每轮上下文注入**（`hooks/inject.js`）：检测到开发意图的提示词时，自动注入七阶段流程提醒。
 - **执行代理**（`agents/code-worker.md`）：主会话只决策，编码一律委派给禁用思考、只执行不决策的 code-worker 子代理。
-- **对抗性审查**（`agents/reviewer.md`）：实现与量化验收完成后，委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail/pass-with-issues 时修复重审，最多 2 轮，见 SKILL 阶段 4.5）。
+- **对抗性审查**（`agents/reviewer.md`）：实现与量化验收完成后，委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿，见 SKILL 阶段 4.5）。
 
 ## 七阶段工作流程
 
@@ -43,7 +43,7 @@
 | --- | --- |
 | `hooks/gate.js` | PreToolUse 门禁：无 approved spec 拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书路径拦截 Agent 委派 |
 | `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把七阶段流程提醒注入上下文 |
-| `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict=pass 才能结束交付 |
+| `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）才能结束交付 |
 | `hooks/ui-collect.js` | 浏览器内 eval 采集页面几何数据（多视口）为 JSON |
 | `hooks/ui-analyzer.mjs` | 量化分析几何 JSON：越界/重叠/44px 点击区/对比度等，生成 ui-report.json |
 | `hooks/lvgl-check.mjs` | LVGL C 源码静态量化校验，生成同一格式的 ui-report.json |
