@@ -14,6 +14,11 @@ const AGENT_DENY_REASON =
   '委派任务前请先走 /spec 流程：产出规格文档（docs/specs/）与任务书（docs/tasks/）并在委派 prompt 中引用其路径。' +
   '注意：实际写入代码文件仍受 Write/Edit 层门禁约束（需 status: approved；UI 文件另需 wireframe: approved）。';
 
+// v1.5.0 执行书硬门禁：编码类委派缺执行书引用时的拒绝原因（规格 2.3 原文）
+const EXEC_PLAN_DENY_REASON =
+  '编码委派必须附执行书（docs/tasks/<slug>-exec.md，含精确 old→new 与验证步骤）' +
+  '或声明 exec-plan: exempt（仅限非编码任务或用户明确豁免）；勘探由主会话亲自完成（Read/Grep）。';
+
 const UI_DENY_REASON =
   'UI 文件的编写需要规格文档中线框图已获用户批准（spec frontmatter 需含 wireframe: approved）。' +
   '请先在 spec 中产出 UI 数据表与 ASCII 线框图，经用户批准后添加标记，或创建 .dev-sop-skip。';
@@ -274,6 +279,36 @@ function referencesDocsPath(prompt) {
   return re.test(prompt);
 }
 
+// v1.5.0 执行书硬门禁纯函数（规格 docs/specs/exec-plan.md 2.3）：
+//   isCodingDelegation：prompt 提及代码扩展名文件或 lvgl+.c（.c 已在扩展名表内，
+//     "lvgl 相关 .c" 天然覆盖），大小写不敏感。纯文档（.md）与报告类 .json 不算
+//     编码（review/test-report 委派不受影响）。
+//   hasExecPlanReference：prompt 引用执行书 docs/tasks/<...>-exec.md、变更单
+//     docs/changes/<...>.md（S 级执行书并入其改动清单表），或显式标记
+//     exec-plan: exempt。正则无 g 标志（stateless，可重复调用）。
+const CODE_FILE_EXT_RE =
+  /\.(?:mjs|cjs|tsx|jsx|cpp|cxx|cc|hpp|hxx|scss|sass|html?|css|less|styl|svelte|vue|yaml|yml|toml|ini|conf|xml|sql|lua|dart|swift|scala|kts|kt|php|java|bash|zsh|fish|ps1|bat|cmd|py|rb|go|rs|cs|ts|js|c|h)(?!\w)/i;
+
+const EXEC_PLAN_DOC_RE =
+  /docs[\/\\]tasks[\/\\][\w\-\/\\\u4e00-\u9fa5]+-exec\.md(?!\w)/i;
+const CHANGE_NOTE_DOC_RE =
+  /docs[\/\\]changes[\/\\][\w\-\/\\\u4e00-\u9fa5]+\.md(?!\w)/i;
+const EXEC_PLAN_EXEMPT_RE = /exec-plan:\s*exempt(?!\w)/i;
+
+function isCodingDelegation(prompt) {
+  if (typeof prompt !== 'string' || prompt === '') return false;
+  return CODE_FILE_EXT_RE.test(prompt);
+}
+
+function hasExecPlanReference(prompt) {
+  if (typeof prompt !== 'string' || prompt === '') return false;
+  return (
+    EXEC_PLAN_DOC_RE.test(prompt) ||
+    CHANGE_NOTE_DOC_RE.test(prompt) ||
+    EXEC_PLAN_EXEMPT_RE.test(prompt)
+  );
+}
+
 function deny(reason) {
   const out = {
     hookSpecificOutput: {
@@ -341,12 +376,43 @@ async function main() {
       return 0;
     }
 
-    if (allow) {
-      appendLog('PreToolUse', toolName, '(agent)', 'allow', 'references docs/specs|tasks|changes path');
+    if (!allow) {
+      appendLog('PreToolUse', toolName, '(agent)', 'deny', 'no docs/specs|tasks|changes path referenced');
+      return deny(AGENT_DENY_REASON);
+    }
+
+    // ---- v1.5.0 执行书硬门禁（docs 引用前提下）----
+    // 放行条件链：引用执行书（docs/tasks/<slug>-exec.md）/ 变更单（docs/changes/*.md）
+    // / 显式豁免标记 exec-plan: exempt → 放行；否则编码类 → deny（编码委派必须附
+    // 执行书）；非编码类 → 维持现状放行。
+    let execPlanOk = false;
+    try {
+      execPlanOk = hasExecPlanReference(promptText);
+    } catch (e) {
+      process.stderr.write('[dev-sop] failed to scan agent prompt: ' + (e && e.message) + '\n');
+      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan prompt: ' + (e && e.message));
       return 0;
     }
-    appendLog('PreToolUse', toolName, '(agent)', 'deny', 'no docs/specs|tasks|changes path referenced');
-    return deny(AGENT_DENY_REASON);
+    if (execPlanOk) {
+      appendLog('PreToolUse', toolName, '(agent)', 'allow', 'exec-plan reference or exempt marker');
+      return 0;
+    }
+
+    let coding = false;
+    try {
+      coding = isCodingDelegation(promptText);
+    } catch (e) {
+      process.stderr.write('[dev-sop] failed to scan agent prompt: ' + (e && e.message) + '\n');
+      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan prompt: ' + (e && e.message));
+      return 0;
+    }
+    if (coding) {
+      appendLog('PreToolUse', toolName, '(agent)', 'deny', 'coding delegation without exec-plan');
+      return deny(EXEC_PLAN_DENY_REASON);
+    }
+
+    appendLog('PreToolUse', toolName, '(agent)', 'allow', 'non-coding delegation, docs path referenced');
+    return 0;
   }
 
   // ---- Edit / Write / ApplyPatch ----
@@ -450,4 +516,7 @@ module.exports = {
   findApprovedChangeNote,
   referencesDocsPath,
   isWhitelisted,
+  isCodingDelegation,
+  hasExecPlanReference,
+  EXEC_PLAN_DENY_REASON,
 };

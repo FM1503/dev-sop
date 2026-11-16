@@ -121,13 +121,15 @@ test('outputTextFor：闩锁写失败时输出不含提示句（fail-open 与实
   assert.strictEqual(outputTextFor(decideInjection('t1', true), false), REMINDER_TEXT);
 });
 
-test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变更单标记）', () => {
+test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变更单标记；v1.5.0 增补执行书标记）', () => {
   for (const marker of [
     '十一条流程纪律',
     'status',
     'wireframe: approved',
     'docs/changes 变更单',
     'tier S/M',
+    '执行书 docs/tasks/<slug>-exec.md',
+    'exec-plan: exempt',
     'ui/test/review-report.json',
     '单命令≤2min',
     'reviewer 独立审查',
@@ -138,9 +140,24 @@ test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变
   assert.ok(!REMINDER_TEXT.includes('\n'), '提醒必须只有一行');
 });
 
-test('CONTEXT_TEXT：十一条纪律完整，第 6 条含 diff 委派要求（v1.2.0），第 11 条含分级路由（v1.4.0 新增）', () => {
+test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+豁免（v1.5.0 改写），第 6 条含 diff 委派要求（v1.2.0），第 11 条含分级路由（v1.4.0 新增）', () => {
   for (let i = 1; i <= 11; i++) {
     assert.ok(CONTEXT_TEXT.includes(i + ')'), '缺少第 ' + i + ' 条');
+  }
+  const item5 = /5\)([^]*?)6\)/.exec(CONTEXT_TEXT);
+  assert.ok(item5, '未能截取第 5 条');
+  for (const marker of [
+    '亲自勘探（Read/Grep）',
+    '执行书 docs/tasks/<slug>-exec.md',
+    '文本级精确 old→new',
+    '每步验证命令与预期输出',
+    'S 级并入变更单改动清单',
+    '委派 prompt 引用执行书路径',
+    'code-worker 只机械应用',
+    '不匹配即停报不重试',
+    'exec-plan: exempt',
+  ]) {
+    assert.ok(item5[1].includes(marker), '第 5 条缺少标记：' + marker);
   }
   assert.ok(CONTEXT_TEXT.includes('改动文件清单'));
   assert.ok(/6\)[^9]*?diff 获取方式/.test(CONTEXT_TEXT), '第 6 条须含 diff 获取方式');

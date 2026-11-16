@@ -21,7 +21,7 @@ const CONTEXT_TEXT =
   '2) 用 WebSearch/WebFetch 联网调研成熟案例与最佳实践，关键结论附来源链接；' +
   '3) 产出 docs/specs/<slug>.md（frontmatter status: draft），经用户批准改为 status: approved 后方可编码；' +
   '4) 委派 code-worker 前必须先产出 docs/tasks/<slug>.md 任务书（含目标文件、期望行为、验收标准），且委派 prompt 中必须写明任务书路径；' +
-  '5) 编码阶段遵循 TDD 并在完成后对抗性自审；编码实现一律通过 Agent 工具委派 code-worker 执行代理完成（插件内置代理名为 dev-sop:code-worker，禁用思考、只执行不决策；若你已配置同名用户级代理则直接使用之），主会话只做决策与验收；' +
+  '5) 编码阶段遵循 TDD 并在完成后对抗性自审；编码实现一律通过 Agent 工具委派 code-worker 执行代理完成（插件内置代理名为 dev-sop:code-worker，禁用思考、只执行不决策；若你已配置同名用户级代理则直接使用之），主会话只做决策与验收；编码实现前主会话必须亲自勘探（Read/Grep）目标文件现状并产出执行书 docs/tasks/<slug>-exec.md（文本级精确 old→new+每步验证命令与预期输出；S 级并入变更单改动清单），委派 prompt 引用执行书路径；code-worker 只机械应用，不匹配即停报不重试；非编码任务或用户明确豁免时在委派 prompt 标 exec-plan: exempt；' +
   '6) 实现完成后进入审查：与量化验收自动闭环同消息并发委派 reviewer 子代理（插件内置，独立上下文、只读、开思考）对照任务书做四维审查：报告写入 docs/specs/<slug>.review-report.json；委派 reviewer 时提供改动文件清单与 diff 获取方式（git 命令或直接附 diff）；verdict 须为 pass 或 pass-with-issues（fail 须修复重审，pass-with-issues 须经用户确认定稿）；fail 时整理问题清单委派 code-worker 修复后重审（最多 2 轮，仍未 pass 如实呈报用户仲裁，禁止推荐跳过）；pass 或 pass-with-issues 均须经 AskUserQuestion 呈报用户、经确认方可定稿；spec 声明 review: required 时 Stop 钩子强制校验报告存在且 verdict 合规；' +
   '7) 若任务涉及界面/UI/LVGL/布局绘制，额外强制：先读插件内置设计规范（references/design-rules.md），spec 中产出 UI 数据表与 ASCII 线框并经用户批准（frontmatter 加 wireframe: approved）后才能写 UI 代码；实现后用 ui-analyzer/lvgl-check 量化校验 error 清零（截图仅备选）；交付时 Stop 钩子强制校验 docs/specs/<slug>.ui-report.json 存在且全部 error=0，未完成量化验收无法结束任务；' +
   '8) 遇到门禁拦截与流程要求冲突（如死锁）时，如实向用户报告冲突详情并等待指示，禁止将"跳过流程"作为推荐选项；.dev-sop-skip 仅在用户明确要求时创建；' +
@@ -40,7 +40,7 @@ const LATCH_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const LATCH_NOTICE = '本会话后续轮次将以一行提醒替代全文。';
 const REMINDER_TEXT =
   'dev-sop：十一条流程纪律已于本会话注入，继续严格遵守（关键标记：status/wireframe: approved、docs/changes 变更单与 tier S/M、' +
-  'ui/test/review-report.json、单命令≤2min、reviewer 独立审查）；细节遗忘时重读 spec 与任务书。';
+  '执行书 docs/tasks/<slug>-exec.md 与 exec-plan: exempt、ui/test/review-report.json、单命令≤2min、reviewer 独立审查）；细节遗忘时重读 spec 与任务书。';
 
 // ---- 纯函数（导出供单测；不触碰 stdin/stdout/文件系统副作用） ----
 

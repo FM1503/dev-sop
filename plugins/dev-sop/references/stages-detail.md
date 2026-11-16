@@ -10,6 +10,7 @@
 4. 阶段 3：产出规格文档
 5. 阶段 3.2：UI 规格（任务涉及界面时必做）
 6. 阶段 3.5：任务书（spec 批准之后、委派 code-worker 之前）
+6.5. 阶段 3.6：执行书（任务书之后、委派编码之前，v1.5.0）
 7. 阶段 4：TDD 实现 + 自审
 8. 阶段 4.5：独立代码审查（reviewer）
 9. 决策层 / 执行层分离与执行代理
@@ -46,7 +47,7 @@
 1. **判据自评**（主会话）：对照 1.1 路由表逐条核对（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、无 UI/LVGL 文件）。
 2. **AskUserQuestion 单问**：改动方案一句话 + 影响面 + 选项（批准 / 拒绝 / 改走全流程）。
 3. **写变更单**：复制 `references/spec-templates/change-lite.md` 骨架到 `docs/changes/<slug>.md`（该路径在白名单内），frontmatter 含 slug / `status: approved`（事前单问已批）/ date / `tier: S` / `changed-files: <逗号清单>`，正文 5 行内（改什么/为什么/影响面/回滚方式）。
-4. **委派 code-worker**：prompt 引用变更单路径（满足 Agent 委派门禁），**免任务书**。
+4. **委派 code-worker**：prompt 引用变更单路径（满足 Agent 委派门禁与 v1.5.0 执行书门禁——变更单正文须含"改动清单"表，同样**文本级精确 old→new**（勘探由主会话亲自 Read/Grep 完成，见第 6.5 节），S 级不再另建独立执行书），**免任务书**。
 5. **修完跑受影响测试**（若有）：只跑受影响测试，测试纪律（单命令≤2 分钟等）沿用。
 6. **reviewer diff 快审**：输入含变更单；**新增校验维度：tier 合规——超 S 判据即 P1"要求升级流程"**（四维审查照常）。
 7. **报告**：`docs/changes/<slug>.review-report.json`（结构同第 8 节；测试结果记入 summary.checked；不复用 docs/specs/ 路径）。verdict 判定规则与修复循环（fail 修复重审最多 2 轮）同第 8 节。
@@ -157,7 +158,7 @@ ui-files: src/ui/main.html, src/ui/style.css
 
 量化验收不再由主会话逐轮驱动，而是通过**单次 code-worker 委派合同**自动闭环。委派 prompt 必须包含以下全部七要素（缺一即合同不完整）：
 
-1. **任务书与规格路径**：委派 prompt 必须引用任务书与规格的 .md 路径（`docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`，满足 Agent 委派门禁）。
+1. **任务书与规格路径**：委派 prompt 必须引用任务书与规格的 .md 路径（`docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`，满足 Agent 委派门禁）；v1.5.0 起，本委派属编码类（提及 .js/.mjs 等代码文件），还须引用执行书 `docs/tasks/<slug>-exec.md` 或标 `exec-plan: exempt`（见第 6.5 节）。
 2. **插件脚本路径**：委派前主会话必须解析插件实际安装目录并把可直接执行的**绝对路径**写入 prompt（如 `<安装目录>/hooks/ui-collect.js` 与 `<安装目录>/hooks/ui-analyzer.mjs`；安装目录可在设置→插件详情或 `~/.zcode/cli/plugins` 下确认）——Web 任务用 `<安装目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<安装目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<安装目录>/hooks/lvgl-check.mjs`（C 源码静态校验）。
 3. **双视口要求**：Web 任务至少采集两个视口——默认宽度 + 一个非默认宽度（如 375px 与 1280px，或项目约定组合）。
 4. **循环指令**："采集 → 分析 → 修复 → 复测，直至全部 error=0"——code-worker 在同一委派内自行迭代，主会话不逐轮参与。
@@ -191,6 +192,23 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 - 委派 `Agent`（code-worker）的 prompt 中必须**显式写出任务书与 spec 的相对路径**，例如 `docs/tasks/<slug>.md`、`docs/specs/<slug>.md`。
 - prompt 中不得包含技术决策类问题，决策由主会话完成；code-worker 只执行。
 - 未引用 `docs/specs/`、`docs/tasks/` 或 `docs/changes/`（v1.4.0 变更单）路径的委派会被 PreToolUse hook 直接拦截（exit 2）。
+- 编码类委派（prompt 提及代码文件）还须引用执行书 `docs/tasks/<slug>-exec.md` 或变更单路径，或标 `exec-plan: exempt`（v1.5.0 执行书门禁；执行书产出见第 6.5 节），否则同样被拦截。
+
+## 第 6.5 节：阶段 3.6 执行书（任务书之后、委派编码之前，v1.5.0）
+
+**worker 零思考纯执行**：勘探与方案设计全部上移主会话，code-worker 只逐条机械应用。产出执行书 `docs/tasks/<slug>-exec.md`（与任务书同 slug，S 级并入变更单的"改动清单"表，不再独立成文件）：
+
+1. **主会话亲自勘探**：用 Read / Grep 亲自查看目标文件现状（不委派、不凭记忆），复制准确的现有文本片段作为 old 锚点。
+2. **按模板产出**：复制 `references/spec-templates/exec-plan.md` 骨架到 `docs/tasks/<slug>-exec.md`，填两张表——"改动清单"（序号 / 文件 / 定位 old 精确片段（新文件标 NEW）/ 改为 new 文本或全文）与"执行顺序与验证"（步骤 / 动作（应用序号 N / 运行命令）/ 预期输出（精确））；frontmatter：slug（同任务书）/ date / files-touched。
+3. **并入委派**：委派 code-worker 的 prompt 引用执行书路径（该引用同时满足 Agent 委派门禁的执行书要求）；S 级改为在变更单正文追加同样的"改动清单"表，委派 prompt 引用变更单路径即可。
+
+**文本级精确约束（硬性）**：
+
+- old 片段必须与文件当前内容**逐字符一致**（主会话勘探时复制，禁止手打或凭记忆改写）；锚点片段须在文件内唯一。
+- new 文本为完整替换内容（非"意图描述"）；新文件给全文。
+- 每步验证命令含**显式 timeout**，预期输出精确到可逐字符比对。
+
+code-worker 侧行为（见 `agents/code-worker.md` 执行书模式）：逐条按序应用 + 每步验证比对；禁止读取清单外文件、禁止自行搜索/近似定位/重试不匹配项、禁止任何方案决策；old 不匹配 / 锚点缺失 / 预期输出不符 → 立即停报（前提不符），不尝试修复；执行书错误导致停报属预期，由主会话修书重发。非编码任务（纯文档/调研）或用户明确豁免时，委派 prompt 标 `exec-plan: exempt`；豁免标记滥用由 reviewer 执行书符合度维度兜底（第 8 节）。
 
 ## 第 7 节：阶段 4 TDD 实现 + 自审
 
@@ -300,7 +318,7 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 ### 12.1 核心原则细则
 
-- 本流程是强制的顺序门禁：阶段 1 的需求澄清、阶段 2 的联网调研、阶段 3 的规格审批、阶段 3.5 的任务书，任何一步没完成，都不允许进入阶段 4 写业务代码。项目里的 `PreToolUse` hook（`hooks/gate.js`）会硬性拦截对 `docs/specs/` 以外业务文件的 Edit / Write / ApplyPatch，直到出现一份 `status: approved` 的规格文档，或（v1.4.0 分级路由）一份 `status: approved` 的变更单（`docs/changes/*.md`，解锁 S/M 快速通道写入）；同时会拦截未在 prompt 中引用 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径的 `Agent` / `Task` 委派（hook 位于 `hooks/gate.js`，配套 `hooks/inject.js` 在检测到开发意图时自动注入本流程提醒——v1.2.0 起同会话首轮注入全文，次轮起以一行提醒替代）。
+- 本流程是强制的顺序门禁：阶段 1 的需求澄清、阶段 2 的联网调研、阶段 3 的规格审批、阶段 3.5 的任务书、阶段 3.6 的执行书，任何一步没完成，都不允许进入阶段 4 写业务代码。项目里的 `PreToolUse` hook（`hooks/gate.js`）会硬性拦截对 `docs/specs/` 以外业务文件的 Edit / Write / ApplyPatch，直到出现一份 `status: approved` 的规格文档，或（v1.4.0 分级路由）一份 `status: approved` 的变更单（`docs/changes/*.md`，解锁 S/M 快速通道写入）；同时会拦截未在 prompt 中引用 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径的 `Agent` / `Task` 委派；v1.5.0 起，编码类委派（prompt 提及代码文件扩展名或 lvgl+.c）还必须引用执行书 `docs/tasks/<slug>-exec.md`、变更单路径，或显式标记 `exec-plan: exempt`（仅限非编码任务或用户明确豁免），否则拦截（hook 位于 `hooks/gate.js`，配套 `hooks/inject.js` 在检测到开发意图时自动注入本流程提醒——v1.2.0 起同会话首轮注入全文，次轮起以一行提醒替代）。
 - **测试预算三条（硬性，由 `hooks/test-guard.js` 强制）**：单条测试命令 ≤2 分钟（必须显式设置 ≤120000ms 的 timeout）；整场验收 ≤10 分钟；测试命令禁止后台（run_in_background）与监听模式（--watch/nodemon）。超预算须先用 AskUserQuestion 获得用户批准并在项目根创建 `.dev-sop-approve-longtest`。
 
 ### 12.2 被门禁拦截时
@@ -314,6 +332,11 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 - 说明本次 `Agent` / `Task` 委派的 prompt 没有引用 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径。
 - 处理：完成阶段 3.5 产出任务书（或 S/M 通道的变更单），并在委派 prompt 中写明 `docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`（或 `docs/changes/<slug>.md`）的相对路径后重新委派；不要绕过门禁。
+
+如果收到 "编码委派必须附执行书…" 的拒绝（v1.5.0）：
+
+- 说明本次委派被判为编码类（prompt 提及代码文件扩展名或 lvgl+.c），但既未引用执行书/变更单，也未声明豁免。
+- 处理：主会话亲自 Read/Grep 勘探目标文件后按第 6.5 节产出执行书 `docs/tasks/<slug>-exec.md`（或在变更单中补"改动清单"表），委派 prompt 引用其路径后重新委派；仅当任务确属非编码（纯文档/调研）或用户明确豁免时，才在 prompt 中标 `exec-plan: exempt`——勘探工作不得转嫁给 code-worker。
 
 ### 12.3 执行日志
 

@@ -5,11 +5,11 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 # dev-sop：规格驱动的开发门禁
 
-新功能 / 新项目开发的强制顺序门禁：需求澄清 → 联网调研 → 规格审批 → 任务书 → TDD 实现 → 量化验收 → 独立审查。本文只保留流程骨架与硬规则，**全部实施细则在 `references/stages-detail.md`**（下称"细则"，按节引用）；UI 设计规范见 `references/design-rules.md`，测试纪律见 `references/testing-rules.md`（均位于 dev-sop 插件安装目录）。
+新功能 / 新项目开发的强制顺序门禁：需求澄清 → 联网调研 → 规格审批 → 任务书 → 执行书 → TDD 实现 → 量化验收 → 独立审查。本文只保留流程骨架与硬规则，**全部实施细则在 `references/stages-detail.md`**（下称"细则"，按节引用）；UI 设计规范见 `references/design-rules.md`，测试纪律见 `references/testing-rules.md`（均位于 dev-sop 插件安装目录）。
 
 ## 核心原则
 
-**不做完前置阶段，绝不开始写业务代码。** 门禁由钩子强制：无 approved spec（或 v1.4.0 approved 变更单）时 `hooks/gate.js` 拦截业务文件写入，并拦截未引用 spec/任务书/变更单路径的 Agent 委派。
+**不做完前置阶段，绝不开始写业务代码。** 门禁由钩子强制：无 approved spec（或 v1.4.0 approved 变更单）时 `hooks/gate.js` 拦截业务文件写入，并拦截未引用 spec/任务书/变更单路径的 Agent 委派；v1.5.0 起编码类委派还须引用执行书 `docs/tasks/<slug>-exec.md`（或变更单路径）或标 `exec-plan: exempt`（仅限非编码任务或用户明确豁免）。
 
 五把硬钥匙（任一步没完成，对应文件写不了、任务结束不了）：
 
@@ -46,6 +46,10 @@ description: Spec-driven development gate for ANY new feature or project build r
 ### 阶段 3.5：任务书（spec 批准后、委派 code-worker 前必做）
 
 产出 `docs/tasks/<slug>.md`：目标文件清单、期望行为、验收标准、测试要求、**五列验收测试计划表**（验收标准/测试层级/命令/预期输出/预计耗时，表外测试禁止执行）、参考；委派 prompt 必须显式写明任务书与 spec 的相对路径，且不含技术决策类问题。细则：stages-detail.md 第 6 节；表格模板见第 11 节。
+
+### 阶段 3.6：执行书（v1.5.0，委派编码前必做）
+
+主会话勘探后产出（模板 `references/spec-templates/exec-plan.md`），委派必附：主会话亲自 Read/Grep 勘探目标文件现状 → 产出 `docs/tasks/<slug>-exec.md`（文本级精确 old→new 改动清单 + 每步验证命令与预期输出；S 级并入变更单改动清单，委派 prompt 引用变更单路径即可）→ 并入委派 prompt；编码类委派缺执行书引用会被 gate 拦截；非编码任务或用户明确豁免时标 `exec-plan: exempt`。细则：stages-detail.md 第 6.5 节。
 
 ### 阶段 4：TDD 实现 + 自审（量化验收自动闭环，≤5轮/10min）
 
