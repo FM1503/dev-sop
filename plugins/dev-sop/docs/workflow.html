@@ -38,7 +38,7 @@
   /* 流程：桌面横向、移动纵向 */
   .stages {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    grid-template-columns: repeat(8, 1fr);
     gap: 12px;
     list-style: none;
     counter-reset: stage;
@@ -131,6 +131,13 @@
   <h2>七阶段工作流程</h2>
   <ol class="stages">
     <li class="stage">
+      <span class="num">0</span>
+      <h3>分级路由</h3>
+      <div class="acts">收到开发需求先按判据定级：S 快速通道（单问批准 + 变更单）／M 精简四步／L 全量流程；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。</div>
+      <div class="out">产出：S/M 走 docs/changes/&lt;slug&gt;.md 变更单</div>
+      <span class="gate">流程与风险成正比</span>
+    </li>
+    <li class="stage">
       <span class="num">1</span>
       <h3>需求澄清访谈</h3>
       <div class="acts">AskUserQuestion 分至少 2 批提问（每批 ≤4 问），覆盖功能、外观、非功能、边界与验收；首批答复后同轮先发 WebSearch——调研与访谈并行。</div>
@@ -221,7 +228,7 @@
   </table>
 
   <footer>
-    dev-sop v1.3.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
+    dev-sop v1.4.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
   </footer>
 </div>
 </body>

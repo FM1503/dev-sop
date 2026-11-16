@@ -9,7 +9,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ## 核心原则
 
-**不做完前置阶段，绝不开始写业务代码。** 门禁由钩子强制：无 approved spec 时 `hooks/gate.js` 拦截业务文件写入，并拦截未引用 spec/任务书路径的 Agent 委派。
+**不做完前置阶段，绝不开始写业务代码。** 门禁由钩子强制：无 approved spec（或 v1.4.0 approved 变更单）时 `hooks/gate.js` 拦截业务文件写入，并拦截未引用 spec/任务书/变更单路径的 Agent 委派。
 
 五把硬钥匙（任一步没完成，对应文件写不了、任务结束不了）：
 
@@ -23,9 +23,9 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ## 七阶段流程
 
-### 阶段 0：触发判断
+### 阶段 0：触发判断与分级路由（v1.4.0）
 
-新功能 / 新项目需求进入本流程；用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。细则：stages-detail.md 第 1 节。
+收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。
 
 ### 阶段 1：需求澄清访谈（调研与访谈并行）
 
@@ -73,5 +73,5 @@ description: Spec-driven development gate for ANY new feature or project build r
 ## 被门禁拦截时
 
 - 收到"没有已批准的规格文档"→ 回到阶段 1 推进；用户明确要求跳过时提示创建 `.dev-sop-skip`（完成后删除恢复门禁）。
-- 收到"委派任务前请先走 /spec 流程"→ prompt 补引 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径后重新委派。
+- 收到"委派任务前请先走 /spec 流程"→ prompt 补引 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径后重新委派。
 - 排查门禁误拦/未触发：看执行日志 `~/.zcode/hooks/dev-sop.log`（UserPromptSubmit 注入 v1.2.0 起 decision=inject-full/inject-reminder/inject/pass）。细则：stages-detail.md 第 12 节。

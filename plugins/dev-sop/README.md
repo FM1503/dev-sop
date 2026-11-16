@@ -1,6 +1,6 @@
-# dev-sop：开发 SOP 门禁（v1.3.0）
+# dev-sop：开发 SOP 门禁（v1.4.0）
 
-让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。
+让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。v1.4.0 起引入**变更分级路由**：流程重量与风险成正比——S 快速通道（单问批准+变更单）／M 精简四步／L 全量流程，判据与流程见 `references/stages-detail.md` 第 1 节。
 
 ## 解决什么问题
 
@@ -43,9 +43,9 @@
 
 | 组件 | 作用 |
 | --- | --- |
-| `hooks/gate.js` | PreToolUse 门禁：无 approved spec 拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书路径拦截 Agent 委派 |
-| `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把七阶段流程提醒注入上下文；同会话闩锁去重（首轮全文、次轮一行提醒，详见上文注入闩锁机制） |
-| `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）才能结束交付 |
+| `hooks/gate.js` | PreToolUse 门禁：无 approved spec（或 v1.4.0 approved 变更单 `docs/changes/*.md`）拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书/变更单路径拦截 Agent 委派 |
+| `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把流程纪律（v1.4.0 起十一条，含第 11 条分级路由）注入上下文；同会话闩锁去重（首轮全文、次轮一行提醒，详见上文注入闩锁机制） |
+| `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）才能结束交付；v1.4.0 变更单（tier S/M）交付校验 `docs/changes/<slug>.review-report.json`（M 另加单条 test-report），连续 5 个 S 级附合并评估提醒 |
 | `hooks/ui-collect.js` | 浏览器内 eval 采集页面几何数据（多视口）为 JSON |
 | `hooks/ui-analyzer.mjs` | 量化分析几何 JSON：越界/重叠/44px 点击区/对比度等，生成 ui-report.json |
 | `hooks/lvgl-check.mjs` | LVGL C 源码静态量化校验，生成同一格式的 ui-report.json |
@@ -54,6 +54,7 @@
 | `references/stages-detail.md` | 七阶段完整实施细则（v1.2.0）：SKILL 正文只留流程骨架，各阶段细则逐节下沉于此，按需查阅 |
 | `references/design-rules.md` | 内置设计规范：硬校验量化规则与软指导（Flex/Grid 优先等） |
 | `references/spec-templates/` | 三类 spec 骨架模板（cli-tool / web-ui / lvgl，v1.3.0）：阶段 3 按任务类型复制到 `docs/specs/<slug>.md` 再填充，禁止现编结构 |
+| `references/spec-templates/change-lite.md` | S/M 变更单骨架（v1.4.0）：阶段 0S/0M 复制到 `docs/changes/<slug>.md`，frontmatter slug/status: approved/date/tier: S/changed-files + 正文四行（改什么/为什么/影响面/回滚方式），M 可加长含验收 checklist |
 | `agents/code-worker.md` | 执行代理定义：禁用思考、只执行不决策，是唯一写代码的角色 |
 | `agents/reviewer.md` | 审查代理定义：独立上下文、只读（唯一可写 review-report.json），对照任务书做符合度/缺陷/安全性能/测试四维审查，第五把钥匙的执行者 |
 | `commands/spec.md` | `/spec` 命令：手动进入规格驱动流程的入口 |

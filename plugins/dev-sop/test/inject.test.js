@@ -121,10 +121,13 @@ test('outputTextFor：闩锁写失败时输出不含提示句（fail-open 与实
   assert.strictEqual(outputTextFor(decideInjection('t1', true), false), REMINDER_TEXT);
 });
 
-test('REMINDER_TEXT：一行提醒文案含全部关键标记', () => {
+test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变更单标记）', () => {
   for (const marker of [
+    '十一条流程纪律',
     'status',
     'wireframe: approved',
+    'docs/changes 变更单',
+    'tier S/M',
     'ui/test/review-report.json',
     '单命令≤2min',
     'reviewer 独立审查',
@@ -135,12 +138,15 @@ test('REMINDER_TEXT：一行提醒文案含全部关键标记', () => {
   assert.ok(!REMINDER_TEXT.includes('\n'), '提醒必须只有一行');
 });
 
-test('CONTEXT_TEXT：十条纪律完整，第 6 条含 diff 委派要求（v1.2.0 新增）', () => {
-  for (let i = 1; i <= 10; i++) {
+test('CONTEXT_TEXT：十一条纪律完整，第 6 条含 diff 委派要求（v1.2.0），第 11 条含分级路由（v1.4.0 新增）', () => {
+  for (let i = 1; i <= 11; i++) {
     assert.ok(CONTEXT_TEXT.includes(i + ')'), '缺少第 ' + i + ' 条');
   }
   assert.ok(CONTEXT_TEXT.includes('改动文件清单'));
   assert.ok(/6\)[^9]*?diff 获取方式/.test(CONTEXT_TEXT), '第 6 条须含 diff 获取方式');
+  for (const marker of ['分级路由', '按判据定级', '单问快速通道', '禁止小改套全流程', 'docs/changes/<slug>.md', '才走全量流程', '判据不含 UI 文件']) {
+    assert.ok(CONTEXT_TEXT.includes(marker), '第 11 条缺少标记：' + marker);
+  }
 });
 
 // ---- staleLatchFiles / cleanStaleLatches：48h 清理 ----

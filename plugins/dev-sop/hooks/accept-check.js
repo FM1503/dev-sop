@@ -16,6 +16,11 @@
 //    pass 或 pass-with-issues（fail/未知取值/缺失/非法 JSON 均 block；
 //    pass-with-issues 须主会话已向用户呈报问题清单并经确认定稿，见 SKILL 阶段 4.5）
 //    （第五把钥匙）。
+// 4) 检测 docs/changes/*.md 变更单（v1.4.0 分级路由）：tier S/M 且 status: approved
+//    且 changed-files 任一已实现 → 强制要求 docs/changes/<slug>.review-report.json
+//    verdict 为 pass 或 pass-with-issues；tier M 另要求 docs/changes/<slug>.test-report.json
+//    （records≥1 全 pass）；mtime 最近 5 个变更单全为 tier S 时，放行日志 reason 追加
+//    5-consecutive-S-hint、block reason 附合并提醒。
 
 const fs = require('fs');
 const os = require('os');
@@ -68,6 +73,7 @@ function findProjectRoot(probeFile) {
       existsSyncSafe(path.join(dir, '.git')) ||
       existsSyncSafe(path.join(dir, 'package.json')) ||
       existsSyncSafe(path.join(dir, 'docs', 'specs')) ||
+      existsSyncSafe(path.join(dir, 'docs', 'changes')) || // v1.4.0：变更单项目根锚点
       existsSyncSafe(path.join(dir, '.dev-sop-skip')) ||
       existsSyncSafe(path.join(dir, '.spec-gate-skip')) // 旧名回退兼容
     ) {
@@ -289,6 +295,74 @@ function findReviewSpecs(projectRoot) {
   return specs;
 }
 
+// ---- 变更单判定纯函数（v1.4.0 分级路由，规格 docs/specs/tier-routing.md 2.5）----
+
+// 扫描 docs/changes/*.md，解析 frontmatter 的 tier/changed-files/status/slug，
+// 返回 [{ file, slug, tier, status, changedFiles, mtimeMs }]（tier/status 归一大写/小写）。
+function findChangeNotes(projectRoot) {
+  const changesDir = path.join(projectRoot, 'docs', 'changes');
+  if (!existsSyncSafe(changesDir)) return [];
+  let entries;
+  try {
+    const stat = fs.statSync(changesDir);
+    if (!stat.isDirectory()) return [];
+    entries = fs.readdirSync(changesDir, { withFileTypes: true });
+  } catch (e) {
+    return [];
+  }
+  const notes = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (path.extname(entry.name).toLowerCase() !== '.md') continue;
+    const file = path.join(changesDir, entry.name);
+    const fm = readFrontmatter(file);
+    if (!fm) continue;
+    const slugField = frontmatterField(fm, 'slug');
+    const slug = slugField || entry.name.replace(/\.md$/i, '');
+    const tier = String(frontmatterField(fm, 'tier') || '').trim().toUpperCase();
+    const status = String(frontmatterField(fm, 'status') || '').trim().toLowerCase();
+    const changedFiles = parseFileList((fm.match(/^changed-files\s*:\s*(.+)$/mi) || [])[1]);
+    let mtimeMs = 0;
+    try {
+      mtimeMs = fs.statSync(file).mtimeMs;
+    } catch (e) {
+      // unreadable mtime: 保留 0，不阻断扫描
+    }
+    notes.push({ file, slug, tier, status, changedFiles, mtimeMs });
+  }
+  return notes;
+}
+
+// 单个变更单的验收要求校验：tier S/M 且 status approved 且 changed-files 任一已实现 →
+// 要求 docs/changes/<slug>.review-report.json 存在且 verdict∈{pass,pass-with-issues}；
+// tier M 另要求 docs/changes/<slug>.test-report.json（records≥1 全 pass）。
+// 返回 null 表示通过或不适用（tier L / draft / 未实现）。
+function checkChangeNote(note, projectRoot) {
+  if (!note || typeof note !== 'object') return null;
+  if (note.tier !== 'S' && note.tier !== 'M') return null; // L 走 docs/specs 全量流程
+  if (note.status !== 'approved') return null;
+  const files = Array.isArray(note.changedFiles) ? note.changedFiles : [];
+  const existing = files.filter((f) => existsSyncSafe(path.resolve(projectRoot, f)));
+  if (existing.length === 0) return null; // 改动未实现，不拦
+  const changesDir = path.join(projectRoot, 'docs', 'changes');
+  const failure = checkReviewReport(path.join(changesDir, note.slug + '.review-report.json'));
+  if (failure) return failure;
+  if (note.tier === 'M') {
+    return checkTestReport(path.join(changesDir, note.slug + '.test-report.json'));
+  }
+  return null; // S 免 test-report（测试结果记入 review 报告 summary.checked）
+}
+
+// mtime 最近 5 个变更单全为 tier: S → true（连续 S 提醒，防 S 级滥用）
+function isFiveConsecutiveS(notes) {
+  const list = (Array.isArray(notes) ? notes : [])
+    .slice()
+    .sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0))
+    .slice(0, 5);
+  if (list.length < 5) return false;
+  return list.every((n) => n && typeof n === 'object' && n.tier === 'S');
+}
+
 // ---- Reviewer 判定规则纯函数（规格 docs/specs/code-review.md 2.1）----
 
 // 按 issues 判定 verdict：任一 P0 → fail；P1 ≥ 3 → fail；
@@ -347,9 +421,14 @@ function checkReviewReport(reportPath) {
   return null;
 }
 
+// 连续 S 提醒后缀（v1.4.0 分级路由防滥用）：main() 扫描变更单后按需设置；
+// 有 block 时附于 reason，放行时日志 reason 追加 5-consecutive-S-hint。
+let consecutiveSSuffix = '';
+
 function block(reason) {
-  process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
-  appendLog('Stop', 'block', reason);
+  const finalReason = consecutiveSSuffix ? reason + consecutiveSSuffix : reason;
+  process.stdout.write(JSON.stringify({ decision: 'block', reason: finalReason }) + '\n');
+  appendLog('Stop', 'block', finalReason);
   return 0;
 }
 
@@ -391,6 +470,19 @@ async function main() {
   if (hasSkipMarker(projectRoot)) {
     appendLog('Stop', 'allow', 'skip file present');
     return 0;
+  }
+
+  // ---- 变更单扫描 + 连续 S 提醒后缀（v1.4.0 分级路由）----
+  let changeNotes;
+  try {
+    changeNotes = findChangeNotes(projectRoot);
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to scan change notes: ' + (e && e.message) + '\n');
+    appendLog('Stop', 'error', 'scan change notes: ' + (e && e.message));
+    return 0;
+  }
+  if (isFiveConsecutiveS(changeNotes)) {
+    consecutiveSSuffix = '提醒：连续 5 个 S 级变更，建议评估是否合并为 M/L。';
   }
 
   // ---- 声明缺失检查（现有 ui/code 检查之前）----
@@ -495,7 +587,35 @@ async function main() {
     }
   }
 
-  appendLog('Stop', 'allow', 'ui/code/review acceptance ok or nothing implemented');
+  // ---- 变更单验收检查（S/M 快速通道，docs/changes/，v1.4.0 分级路由）----
+  for (const note of changeNotes) {
+    let failure;
+    try {
+      failure = checkChangeNote(note, projectRoot);
+    } catch (e) {
+      process.stderr.write('[dev-sop] failed to check change note: ' + (e && e.message) + '\n');
+      appendLog('Stop', 'error', 'check change note: ' + (e && e.message));
+      return 0;
+    }
+    if (failure) {
+      return block(
+        '变更单 docs/changes/' + note.slug + '.md（tier ' + note.tier + '）检测到改动文件已实现但快速通道验收未通过（' + failure + '）。' +
+        '必须：委派 reviewer 快审并把报告写入 docs/changes/' + note.slug + '.review-report.json' +
+        '（verdict 为 pass 或 pass-with-issues）' +
+        (note.tier === 'M'
+          ? '，并产出 docs/changes/' + note.slug + '.test-report.json（records≥1 全 pass、summary.failed=0）'
+          : '（S 级免 test-report，测试结果记入审查报告 summary.checked）') +
+        '后方可交付。'
+      );
+    }
+  }
+
+  appendLog(
+    'Stop',
+    'allow',
+    'ui/code/review acceptance ok or nothing implemented' +
+      (consecutiveSSuffix ? ' + 5-consecutive-S-hint' : '')
+  );
   return 0;
 }
 
@@ -516,4 +636,7 @@ module.exports = {
   effectiveReportVerdict,
   checkReviewReport,
   findReviewSpecs,
+  findChangeNotes,
+  checkChangeNote,
+  isFiveConsecutiveS,
 };

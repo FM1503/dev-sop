@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // inject.js — UserPromptSubmit 注入 + 会话级闩锁（v1.2.0 token 节流）
-// 规则来源：docs/specs/efficiency-optimization.md 2.A：
-//   同 session 首轮输出十条纪律全文（末尾追加一句提醒句）并写闩锁文件；
+// 规则来源：docs/specs/efficiency-optimization.md 2.A + docs/specs/tier-routing.md 2.6（第 11 条）：
+//   同 session 首轮输出十一条纪律全文（末尾追加一句提醒句）并写闩锁文件；
 //   次轮起仅输出一行提醒；无 session 字段回退现状全量注入（fail-open）；
 //   创建闩锁时清理同目录 mtime>48h 的 dev-sop-inject-*.latch。
 //   闩锁写失败（catch 分支）时下一轮仍会全文注入，故本轮输出回退纯
@@ -26,7 +26,8 @@ const CONTEXT_TEXT =
   '7) 若任务涉及界面/UI/LVGL/布局绘制，额外强制：先读插件内置设计规范（references/design-rules.md），spec 中产出 UI 数据表与 ASCII 线框并经用户批准（frontmatter 加 wireframe: approved）后才能写 UI 代码；实现后用 ui-analyzer/lvgl-check 量化校验 error 清零（截图仅备选）；交付时 Stop 钩子强制校验 docs/specs/<slug>.ui-report.json 存在且全部 error=0，未完成量化验收无法结束任务；' +
   '8) 遇到门禁拦截与流程要求冲突（如死锁）时，如实向用户报告冲突详情并等待指示，禁止将"跳过流程"作为推荐选项；.dev-sop-skip 仅在用户明确要求时创建；' +
   '9) 规格文档与线框在请求批准前，必须把全文完整呈现在回复中（长文档可分节完整展示，并附文件路径供用户在编辑器/面板打开核对）；批准必须通过 AskUserQuestion 的选项完成（如 批准/需修改/放弃），禁止让用户手动输入确认消息。线框选项必须用 preview 展示 ASCII 图；' +
-  '10) 验收测试遵循测试纪律：金字塔分层（静态→单元→集成→浏览器，后者仅UI项且最少跑）、单命令≤2分钟显式设 timeout、整场≤10分钟、fail-fast 不重跑已绿、迭代只跑受影响测试、禁止后台/监听模式长跑；每条验收标准一个针对性测试，任务书测试计划表之外的测试禁止执行，交付前产出 <slug>.test-report.json；规格批准时 frontmatter 必须声明 code-files（逗号分隔目标代码文件；纯文档任务写 code-files: none），任务书测试计划表必须为五列：验收标准/测试层级/命令/预期输出/预计耗时。';
+  '10) 验收测试遵循测试纪律：金字塔分层（静态→单元→集成→浏览器，后者仅UI项且最少跑）、单命令≤2分钟显式设 timeout、整场≤10分钟、fail-fast 不重跑已绿、迭代只跑受影响测试、禁止后台/监听模式长跑；每条验收标准一个针对性测试，任务书测试计划表之外的测试禁止执行，交付前产出 <slug>.test-report.json；规格批准时 frontmatter 必须声明 code-files（逗号分隔目标代码文件；纯文档任务写 code-files: none），任务书测试计划表必须为五列：验收标准/测试层级/命令/预期输出/预计耗时；' +
+  '11) 分级路由：收到开发需求先按判据定级——S（≤2 文件且净变更<30 行且无新建文件且无接口/依赖/配置变更且不涉 UI/LVGL 文件）走单问快速通道（AskUserQuestion 单问批准后写 docs/changes/<slug>.md 变更单，frontmatter status: approved + tier: S，免任务书/调研/线框/量化验收，reviewer 快审产出 docs/changes/<slug>.review-report.json），禁止小改套全流程；M（单项目内功能调整）走精简四步（1 批澄清≤3 问 + 加长变更单含 tier: M + 受影响测试单条 test-report + reviewer 快审）；L（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）才走全量流程；判据不含 UI 文件——涉 UI 一律 ≥M 线框或 L 全量。';
 
 // v1.2.0 闩锁常量（导出供单测校验）
 const LATCH_HOME_RELATIVE_DIR = path.join('.zcode', 'hooks');
@@ -38,7 +39,7 @@ const LATCH_FILE_RE = new RegExp(
 const LATCH_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 const LATCH_NOTICE = '本会话后续轮次将以一行提醒替代全文。';
 const REMINDER_TEXT =
-  'dev-sop：十条流程纪律已于本会话注入，继续严格遵守（关键标记：status/wireframe: approved、' +
+  'dev-sop：十一条流程纪律已于本会话注入，继续严格遵守（关键标记：status/wireframe: approved、docs/changes 变更单与 tier S/M、' +
   'ui/test/review-report.json、单命令≤2min、reviewer 独立审查）；细节遗忘时重读 spec 与任务书。';
 
 // ---- 纯函数（导出供单测；不触碰 stdin/stdout/文件系统副作用） ----

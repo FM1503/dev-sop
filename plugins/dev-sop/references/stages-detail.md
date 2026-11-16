@@ -4,7 +4,7 @@
 
 **目录**
 
-1. 阶段 0：触发判断
+1. 阶段 0：触发判断与分级路由（含阶段 0S 快速通道 / 阶段 0M 精简四步）
 2. 阶段 1：需求澄清访谈
 3. 阶段 2：联网调研
 4. 阶段 3：产出规格文档
@@ -19,11 +19,51 @@
 
 ---
 
-## 第 1 节：阶段 0 触发判断
+## 第 1 节：阶段 0 触发判断与分级路由
 
 - 用户提出**新功能 / 新项目开发需求**时，进入本流程。
 - 如果用户明确要求"直接改"、"别走流程"，或者只是**小修小改**（改文案、修一个明显的 typo、调整一个常量），可以跳过本流程，并告知用户：可在项目根创建 `.dev-sop-skip` 文件临时解锁门禁。
 - 判定不清时，优先按本流程处理，并向用户说明原因。
+
+### 1.1 阶段 0 分级路由（v1.4.0：流程重量与风险成正比）
+
+收到开发需求后，主会话先按下表判据定级，再进入对应通道；**分级由主会话声明 + reviewer 校验双重把关**：
+
+| 级别 | 判据 | 通道 |
+| --- | --- | --- |
+| **S** | ≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不含 .html/.css/.vue/.jsx/.tsx/ui/*.js/lvgl 相关 .c | 阶段 0S 快速通道（见 1.2） |
+| **M** | 单项目内功能调整（不满足 S 且非新功能/新项目/UI 新界面） | 阶段 0M 精简四步（见 1.3） |
+| **L** | 新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块——现行全量 SOP 不变 | 阶段 1 起全量流程（本文件第 2 节起） |
+
+- **判据不含 UI 文件**：涉 UI（含任何界面/LVGL/布局绘制）一律 ≥M 线框（M 仅限非 UI 前提下的功能调整）或 L 全量。
+- S/M **不替代 L 级 spec**：变更单只解锁对应级别；随时可升级为 L 走全量。
+- **防滥用**：reviewer 审查输入含变更单时校验 tier 合规（超判据记 P1"要求升级流程"，见第 8 节与 `agents/reviewer.md`）；Stop 钩子检测 mtime 最近 5 个变更单全为 tier S 时，在放行日志与（若有 block 时）reason 中附提醒"连续 5 个 S 级，考虑合并为 M/L 评估"。
+
+### 1.2 阶段 0S 快速通道（S 级，八步）
+
+前置：已按 1.1 判据自评为 S。**豁免**：调研 / 线框 / 量化验收 / 任务书 / test-report（测试结果记入审查报告 summary.checked）/ ui-report。
+
+1. **判据自评**（主会话）：对照 1.1 路由表逐条核对（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、无 UI/LVGL 文件）。
+2. **AskUserQuestion 单问**：改动方案一句话 + 影响面 + 选项（批准 / 拒绝 / 改走全流程）。
+3. **写变更单**：复制 `references/spec-templates/change-lite.md` 骨架到 `docs/changes/<slug>.md`（该路径在白名单内），frontmatter 含 slug / `status: approved`（事前单问已批）/ date / `tier: S` / `changed-files: <逗号清单>`，正文 5 行内（改什么/为什么/影响面/回滚方式）。
+4. **委派 code-worker**：prompt 引用变更单路径（满足 Agent 委派门禁），**免任务书**。
+5. **修完跑受影响测试**（若有）：只跑受影响测试，测试纪律（单命令≤2 分钟等）沿用。
+6. **reviewer diff 快审**：输入含变更单；**新增校验维度：tier 合规——超 S 判据即 P1"要求升级流程"**（四维审查照常）。
+7. **报告**：`docs/changes/<slug>.review-report.json`（结构同第 8 节；测试结果记入 summary.checked；不复用 docs/specs/ 路径）。verdict 判定规则与修复循环（fail 修复重审最多 2 轮）同第 8 节。
+8. **呈报定稿**：verdict 为 pass 或 pass-with-issues 时，AskUserQuestion 向用户呈报定稿（同第 8 节第 6 步）。
+
+门禁联动：变更单 `status: approved` 后，`hooks/gate.js` 即放行业务文件写入（reason: approved change note found）；交付时 `hooks/accept-check.js` 校验 `docs/changes/<slug>.review-report.json` 存在且 verdict∈{pass, pass-with-issues}（S 级免 test-report）。
+
+### 1.3 阶段 0M 精简四步（M 级）
+
+前置：按 1.1 判据不满足 S 且非新功能/新项目/UI 新界面（非 UI 前提）。**豁免**：调研 / 线框（非 UI 前提）/ 量化闭环 / 任务书独立文档。
+
+1. **1 批澄清（≤3 问）**：AskUserQuestion 一次批次覆盖目标行为、影响面、验收要点。
+2. **变更单加长版 + 单问批准**：复制 `change-lite.md` 骨架到 `docs/changes/<slug>.md`，可加长至 15 行，须含**验收标准 3-5 条清单**（`- [ ]` 形式）；frontmatter `tier: M` / `status: approved`（单问批准后写入）。
+3. **实现 + 受影响测试**：委派 code-worker（prompt 引用变更单路径）；修完跑受影响测试并产出**单条 test-report**：`docs/changes/<slug>.test-report.json`（结构同第 7 节：records≥1、每条 result=pass、summary.failed=0）。
+4. **reviewer 快审 + 呈报**：同 0S 第 6-8 步（tier 合规校验按 M 判据：单项目内功能调整）；报告 `docs/changes/<slug>.review-report.json`。
+
+门禁联动：M 级交付时 `hooks/accept-check.js` 同时校验 review-report（verdict 合规）与 test-report（单条全 pass）。S/M 修复循环与并行约束沿用 L 级（第 8 节）。
 
 ## 第 2 节：阶段 1 需求澄清访谈
 
@@ -150,7 +190,7 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 
 - 委派 `Agent`（code-worker）的 prompt 中必须**显式写出任务书与 spec 的相对路径**，例如 `docs/tasks/<slug>.md`、`docs/specs/<slug>.md`。
 - prompt 中不得包含技术决策类问题，决策由主会话完成；code-worker 只执行。
-- 未引用 `docs/specs/` 或 `docs/tasks/` 路径的委派会被 PreToolUse hook 直接拦截（exit 2）。
+- 未引用 `docs/specs/`、`docs/tasks/` 或 `docs/changes/`（v1.4.0 变更单）路径的委派会被 PreToolUse hook 直接拦截（exit 2）。
 
 ## 第 7 节：阶段 4 TDD 实现 + 自审
 
@@ -233,6 +273,7 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 **白名单路径**（无需规格即可写）：
 
 - `docs/specs/` 下任意层级（规格文档本身）
+- `docs/changes/` 下任意层级（v1.4.0：S/M 变更单本身，同 specs 待遇）
 - 路径段包含 `test` / `tests` / `__tests__` 的文件（TDD 先写测试）
 - `*.test.*`、`*.spec.*`、`package.json`、`.gitignore`、`README.md`
 
@@ -259,7 +300,7 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 ### 12.1 核心原则细则
 
-- 本流程是强制的顺序门禁：阶段 1 的需求澄清、阶段 2 的联网调研、阶段 3 的规格审批、阶段 3.5 的任务书，任何一步没完成，都不允许进入阶段 4 写业务代码。项目里的 `PreToolUse` hook（`hooks/gate.js`）会硬性拦截对 `docs/specs/` 以外业务文件的 Edit / Write / ApplyPatch，直到出现一份 `status: approved` 的规格文档；同时会拦截未在 prompt 中引用 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径的 `Agent` / `Task` 委派（hook 位于 `hooks/gate.js`，配套 `hooks/inject.js` 在检测到开发意图时自动注入本流程提醒——v1.2.0 起同会话首轮注入全文，次轮起以一行提醒替代）。
+- 本流程是强制的顺序门禁：阶段 1 的需求澄清、阶段 2 的联网调研、阶段 3 的规格审批、阶段 3.5 的任务书，任何一步没完成，都不允许进入阶段 4 写业务代码。项目里的 `PreToolUse` hook（`hooks/gate.js`）会硬性拦截对 `docs/specs/` 以外业务文件的 Edit / Write / ApplyPatch，直到出现一份 `status: approved` 的规格文档，或（v1.4.0 分级路由）一份 `status: approved` 的变更单（`docs/changes/*.md`，解锁 S/M 快速通道写入）；同时会拦截未在 prompt 中引用 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径的 `Agent` / `Task` 委派（hook 位于 `hooks/gate.js`，配套 `hooks/inject.js` 在检测到开发意图时自动注入本流程提醒——v1.2.0 起同会话首轮注入全文，次轮起以一行提醒替代）。
 - **测试预算三条（硬性，由 `hooks/test-guard.js` 强制）**：单条测试命令 ≤2 分钟（必须显式设置 ≤120000ms 的 timeout）；整场验收 ≤10 分钟；测试命令禁止后台（run_in_background）与监听模式（--watch/nodemon）。超预算须先用 AskUserQuestion 获得用户批准并在项目根创建 `.dev-sop-approve-longtest`。
 
 ### 12.2 被门禁拦截时
@@ -271,8 +312,8 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 如果收到 "委派任务前请先走 /spec 流程…" 的拒绝：
 
-- 说明本次 `Agent` / `Task` 委派的 prompt 没有引用 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径。
-- 处理：完成阶段 3.5 产出任务书，并在委派 prompt 中写明 `docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md` 的相对路径后重新委派；不要绕过门禁。
+- 说明本次 `Agent` / `Task` 委派的 prompt 没有引用 `docs/specs/*.md`、`docs/tasks/*.md` 或 `docs/changes/*.md` 路径。
+- 处理：完成阶段 3.5 产出任务书（或 S/M 通道的变更单），并在委派 prompt 中写明 `docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`（或 `docs/changes/<slug>.md`）的相对路径后重新委派；不要绕过门禁。
 
 ### 12.3 执行日志
 

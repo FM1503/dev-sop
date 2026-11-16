@@ -52,6 +52,7 @@ function findProjectRoot(targetFile) {
       existsSyncSafe(path.join(dir, '.git')) ||
       existsSyncSafe(path.join(dir, 'package.json')) ||
       existsSyncSafe(path.join(dir, 'docs', 'specs')) ||
+      existsSyncSafe(path.join(dir, 'docs', 'changes')) || // v1.4.0：变更单项目根锚点
       existsSyncSafe(path.join(dir, '.dev-sop-skip')) ||
       existsSyncSafe(path.join(dir, '.spec-gate-skip')) // 旧名回退兼容
     ) {
@@ -85,9 +86,9 @@ function isWhitelisted(absFile, projectRoot, originalPath) {
   const segments = normalized.split('/').filter(Boolean);
   const base = path.basename(normalized);
 
-  // docs/specs/ at any level
+  // docs/specs/ 与 docs/changes/（变更单）at any level
   for (let i = 0; i < segments.length - 1; i++) {
-    if (segments[i] === 'docs' && segments[i + 1] === 'specs') return true;
+    if (segments[i] === 'docs' && (segments[i + 1] === 'specs' || segments[i + 1] === 'changes')) return true;
   }
 
   // any path segment containing test / tests / __tests__
@@ -103,24 +104,25 @@ function isWhitelisted(absFile, projectRoot, originalPath) {
   return false;
 }
 
-function scanSpecFrontmatter(projectRoot, markerRe) {
-  const specsDir = path.join(projectRoot, 'docs', 'specs');
-  if (!existsSyncSafe(specsDir)) return false;
+// 通用目录扫描：dir 下任一 .md 的 frontmatter（10 行容错）命中 markerRe → 返回该文件
+// 绝对路径，否则返回 null。供 docs/specs 与 docs/changes（变更单）共用。
+function scanFrontmatterDir(dirPath, markerRe) {
+  if (!existsSyncSafe(dirPath)) return null;
   let entries;
   try {
-    const stat = fs.statSync(specsDir);
-    if (!stat.isDirectory()) return false;
-    entries = fs.readdirSync(specsDir, { withFileTypes: true });
+    const stat = fs.statSync(dirPath);
+    if (!stat.isDirectory()) return null;
+    entries = fs.readdirSync(dirPath, { withFileTypes: true });
   } catch (e) {
-    process.stderr.write('[dev-sop] cannot read docs/specs: ' + e.message + '\n');
-    return false;
+    process.stderr.write('[dev-sop] cannot read ' + dirPath + ': ' + e.message + '\n');
+    return null;
   }
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (path.extname(entry.name).toLowerCase() !== '.md') continue;
     let content;
     try {
-      content = fs.readFileSync(path.join(specsDir, entry.name), 'utf8');
+      content = fs.readFileSync(path.join(dirPath, entry.name), 'utf8');
     } catch (e) {
       continue;
     }
@@ -143,9 +145,13 @@ function scanSpecFrontmatter(projectRoot, markerRe) {
     }
     if (end === -1) continue;
     const frontmatter = head.slice(start + 1, end).join('\n');
-    if (markerRe.test(frontmatter)) return true;
+    if (markerRe.test(frontmatter)) return path.join(dirPath, entry.name);
   }
-  return false;
+  return null;
+}
+
+function scanSpecFrontmatter(projectRoot, markerRe) {
+  return scanFrontmatterDir(path.join(projectRoot, 'docs', 'specs'), markerRe) !== null;
 }
 
 function hasApprovedSpec(projectRoot) {
@@ -154,6 +160,15 @@ function hasApprovedSpec(projectRoot) {
 
 function hasWireframeApprovedSpec(projectRoot) {
   return scanSpecFrontmatter(projectRoot, /wireframe\s*:\s*["']?approved["']?/i);
+}
+
+// 变更单解锁（v1.4.0 分级路由）：docs/changes/*.md 任一 frontmatter 含
+// status: approved（10 行容错）→ 返回该变更单路径，否则 null。
+function findApprovedChangeNote(projectRoot) {
+  return scanFrontmatterDir(
+    path.join(projectRoot, 'docs', 'changes'),
+    /status\s*:\s*["']?approved["']?/i
+  );
 }
 
 const UI_FILE_EXT_RE = /\.(html?|css|scss|vue|jsx|tsx)$/i;
@@ -229,7 +244,7 @@ function getAgentPrompt(payload) {
 
 function referencesDocsPath(prompt) {
   if (typeof prompt !== 'string' || prompt === '') return false;
-  const re = /docs[\/\\](specs|tasks)[\/\\][\w\-\/\\\u4e00-\u9fa5]+\.md/g;
+  const re = /docs[\/\\](specs|tasks|changes)[\/\\][\w\-\/\\\u4e00-\u9fa5]+\.md/g;
   return re.test(prompt);
 }
 
@@ -301,10 +316,10 @@ async function main() {
     }
 
     if (allow) {
-      appendLog('PreToolUse', toolName, '(agent)', 'allow', 'references docs/specs or docs/tasks path');
+      appendLog('PreToolUse', toolName, '(agent)', 'allow', 'references docs/specs|tasks|changes path');
       return 0;
     }
-    appendLog('PreToolUse', toolName, '(agent)', 'deny', 'no docs/specs or docs/tasks path referenced');
+    appendLog('PreToolUse', toolName, '(agent)', 'deny', 'no docs/specs|tasks|changes path referenced');
     return deny(AGENT_DENY_REASON);
   }
 
@@ -373,15 +388,40 @@ async function main() {
     return 0;
   }
 
+  // ---- 变更单解锁（v1.4.0 分级路由）：S/M 快速通道的 approved 变更单同级放行 ----
+  let approvedChangeNote = null;
+  try {
+    approvedChangeNote = findApprovedChangeNote(projectRoot);
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to check change notes: ' + (e && e.message) + '\n');
+    appendLog('PreToolUse', toolName, rawFile, 'error', 'check change notes: ' + (e && e.message));
+    return 0;
+  }
+  if (approvedChangeNote) {
+    appendLog('PreToolUse', toolName, rawFile, 'allow', 'approved change note found');
+    return 0;
+  }
+
   appendLog('PreToolUse', toolName, rawFile, 'deny', 'no approved spec');
   return deny(DENY_REASON);
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write('[dev-sop] internal error: ' + (err && err.stack ? err.stack : err) + '\n');
-    appendLog('PreToolUse', '', '', 'error', 'internal error: ' + (err && err.message ? err.message : err));
-    process.exit(0);
-  }
-);
+// 直接运行时执行门禁；被 require（单测）时仅导出纯函数
+if (require.main === module) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write('[dev-sop] internal error: ' + (err && err.stack ? err.stack : err) + '\n');
+      appendLog('PreToolUse', '', '', 'error', 'internal error: ' + (err && err.message ? err.message : err));
+      process.exit(0);
+    }
+  );
+}
+
+module.exports = {
+  hasApprovedSpec,
+  hasWireframeApprovedSpec,
+  findApprovedChangeNote,
+  referencesDocsPath,
+  isWhitelisted,
+};
