@@ -5,246 +5,73 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 # dev-sop：规格驱动的开发门禁
 
+新功能 / 新项目开发的强制顺序门禁：需求澄清 → 联网调研 → 规格审批 → 任务书 → TDD 实现 → 量化验收 → 独立审查。本文只保留流程骨架与硬规则，**全部实施细则在 `references/stages-detail.md`**（下称"细则"，按节引用）；UI 设计规范见 `references/design-rules.md`，测试纪律见 `references/testing-rules.md`（均位于 dev-sop 插件安装目录）。
+
 ## 核心原则
 
-**不做完前置阶段，绝不开始写业务代码。**
+**不做完前置阶段，绝不开始写业务代码。** 门禁由钩子强制：无 approved spec 时 `hooks/gate.js` 拦截业务文件写入，并拦截未引用 spec/任务书路径的 Agent 委派。
 
-**测试预算三条（硬性，由 `hooks/test-guard.js` 强制）**：单条测试命令 ≤2 分钟（必须显式设置 ≤120000ms 的 timeout）；整场验收 ≤10 分钟；测试命令禁止后台（run_in_background）与监听模式（--watch/nodemon）。超预算须先用 AskUserQuestion 获得用户批准并在项目根创建 `.dev-sop-approve-longtest`。
+五把硬钥匙（任一步没完成，对应文件写不了、任务结束不了）：
 
-本流程是强制的顺序门禁：阶段 1 的需求澄清、阶段 2 的联网调研、阶段 3 的规格审批、阶段 3.5 的任务书，任何一步没完成，都不允许进入阶段 4 写业务代码。项目里的 `PreToolUse` hook（`hooks/gate.js`）会硬性拦截对 `docs/specs/` 以外业务文件的 Edit / Write / ApplyPatch，直到出现一份 `status: approved` 的规格文档；同时会拦截未在 prompt 中引用 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径的 `Agent` / `Task` 委派（hook 位于 `hooks/gate.js`，配套 `hooks/inject.js` 在检测到开发意图时自动注入本流程提醒）。
+| 钥匙 | 位置 | 解锁 |
+| --- | --- | --- |
+| `status: approved` | spec frontmatter | 业务代码文件的写入（Write/Edit/ApplyPatch） |
+| `wireframe: approved` | spec frontmatter | UI 文件（.html/.css/.vue/.jsx/.tsx 及 LVGL .c 等）的写入 |
+| `<slug>.ui-report.json` | docs/specs/ | UI 任务的交付（Stop 钩子校验全部 error=0） |
+| `<slug>.test-report.json` | docs/specs/ | 代码任务的交付（Stop 钩子校验 records 全 pass、failed=0） |
+| `<slug>.review-report.json` | docs/specs/ | `review: required` 任务的交付（Stop 钩子校验 verdict 为 pass 或 pass-with-issues） |
 
-**委派门禁与文件门禁的分工**：委派创建规格/任务书等文档时，prompt 中引用目标文档路径（如 `docs/specs/<slug>.md`）即可通过委派门禁（不要求文件已存在）；编码实现的强制检查发生在 code-worker 实际写文件时（Write/Edit 层）。
+## 七阶段流程
 
-白名单路径（无需规格即可写）：
-- `docs/specs/` 下任意层级（规格文档本身）
-- 路径段包含 `test` / `tests` / `__tests__` 的文件（TDD 先写测试）
-- `*.test.*`、`*.spec.*`、`package.json`、`.gitignore`、`README.md`
+### 阶段 0：触发判断
+
+新功能 / 新项目需求进入本流程；用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。细则：stages-detail.md 第 1 节。
+
+### 阶段 1：需求澄清访谈
+
+用 AskUserQuestion 分至少 2 批（每批≤4问）覆盖六大维度（场景 / 功能清单 / 界面外观与交互 / 非功能 / 边界 / 验收标准），**不许臆测任何未确认的需求**；访谈后整理结构化需求列表交用户最终确认。关键约束：外观与功能未被描述清楚前不得进入阶段 2。细则：stages-detail.md 第 2 节。
+
+### 阶段 2：联网调研
+
+用 WebSearch/WebFetch 查证成熟案例与交互惯例、技术选型当前最佳实践、官方文档；所有关键结论必须附来源链接，区分文档结论与社区观点，不确定信息标注待验证。细则：stages-detail.md 第 3 节。
+
+### 阶段 3：产出规格文档
+
+写 `docs/specs/<slug>.md`（frontmatter 必须第 1 行起：status/slug/date/review；批准前必填 `code-files`，纯文档任务写 `code-files: none`），正文五要素：需求规格 / 调研结论与来源 / 技术方案 / 测试计划(TDD) / 验收 checklist；用户批准后 `status: draft` → `status: approved` 解锁代码门禁。细则：stages-detail.md 第 4 节；呈现与批准方式见第 10 节。
+
+### 阶段 3.2：UI 规格（任务涉及界面时必做）
+
+先读 `references/design-rules.md`；spec 补 UI 数据表（屏幕规格/布局策略/组件清单表）+ ASCII 线框图，frontmatter 声明 `ui-files`；线框必须用独立 AskUserQuestion（preview 展示至少 2 个方案）获用户批准后加 `wireframe: approved`，才能解锁 UI 文件门禁（与 status 独立）。细则：stages-detail.md 第 5 节。
+
+### 阶段 3.5：任务书（spec 批准后、委派 code-worker 前必做）
+
+产出 `docs/tasks/<slug>.md`：目标文件清单、期望行为、验收标准、测试要求、**五列验收测试计划表**（验收标准/测试层级/命令/预期输出/预计耗时，表外测试禁止执行）、参考；委派 prompt 必须显式写明任务书与 spec 的相对路径，且不含技术决策类问题。细则：stages-detail.md 第 6 节；表格模板见第 11 节。
+
+### 阶段 4：TDD 实现 + 自审
+
+先写测试（test 路径在白名单内）确认因功能缺失而失败，再实现到全绿；完成后对抗性自审（逻辑 bug / 性能 / 安全 / 规格符合度），发现问题先修再报；交付前按测试计划表逐条执行并产出 `docs/specs/<slug>.test-report.json`（records 全 pass、failed=0）。细则：stages-detail.md 第 7 节。
+
+### 阶段 4.5：独立代码审查（reviewer）
+
+量化验收合规后，委派全新 reviewer 子代理（`agents/reviewer.md`：独立上下文、只读、四维审查、同判定规则），**不得**主会话自任或 code-worker 自审代替。委派 prompt 必须提供：任务书路径、规格路径、**改动文件清单、diff 获取方式**（git 命令或直接附 diff）、报告输出路径 `docs/specs/<slug>.review-report.json`。verdict 判定：任一 P0 或 P1≥3 → fail（整理问题清单委派 code-worker 修复后重审，最多 2 轮，仍 fail 如实呈报用户仲裁，禁止推荐跳过）；仅 P2 或 P1≤2 → pass-with-issues（AskUserQuestion 呈报问题清单，用户确认后定稿）；全清 → pass。`review: required` 的 spec 由 Stop 钩子强制校验报告存在且 verdict 合规。细则：stages-detail.md 第 8 节。
 
 ## 决策层 / 执行层分离
 
-- **主会话是决策层**：只做需求分析、任务拆解、指令下达与结果验收。
-- **一切文件编辑**（含代码、文档、配置、脚本、数据文件）都通过 `Agent` 工具委派给 code-worker 执行代理，主会话不直接编辑文件。
-- **给 code-worker 的指令必须具体**：写明目标文件、期望行为、验收标准，不让其自行做技术决策。
-- **正确处理阻塞汇报**：code-worker 因困难或错误中止回报时，主会话必须先亲自分析原因（查看日志、代码、复现命令输出），再下达明确的下一步指令；不得只回复"继续重试"。
+主会话是决策层，只做需求分析、任务拆解、指令下达与结果验收；**一切文件编辑**（代码、文档、配置）通过 Agent 工具委派 code-worker 执行，指令必须写明目标文件、期望行为、验收标准，不让其自行技术决策；code-worker 阻塞汇报时主会话须先亲自分析原因再下明确指令，不得只说"继续重试"。白名单路径（`docs/specs/`、test 路径、`*.test.*`、`package.json` 等）与委派门禁/文件门禁分工：细则见 stages-detail.md 第 9 节。
 
-## 执行代理说明
+## 执行代理
 
-- 本插件内置 `code-worker` 执行代理（`agents/code-worker.md`）：禁用思考的纯执行代理，默认继承会话模型。
-- 如需为其指定专属模型：将 `agents/code-worker.md` 复制到 `~/.zcode/agents/code-worker.md`，并在 frontmatter 中添加 `model: <providerId/modelId>` 行；用户级同名定义优先于插件级定义。
-- 若用户环境已有同名代理，则自动沿用其定义。
+内置 `dev-sop:code-worker`（`agents/code-worker.md`）：禁用思考、只执行不决策、默认继承会话模型；如需专属模型，复制到 `~/.zcode/agents/code-worker.md` 并在 frontmatter 加 `model: <providerId/modelId>` 行，用户级同名定义优先。详见 stages-detail.md 第 9 节。
 
-## 阶段 0：触发判断
+## 硬规则
 
-- 用户提出**新功能 / 新项目开发需求**时，进入本流程。
-- 如果用户明确要求"直接改"、"别走流程"，或者只是**小修小改**（改文案、修一个明显的 typo、调整一个常量），可以跳过本流程，并告知用户：可在项目根创建 `.dev-sop-skip` 文件临时解锁门禁。
-- 判定不清时，优先按本流程处理，并向用户说明原因。
+- **呈现与批准**：规格与线框在请求批准前必须把全文完整呈现在回复中（可分节展示并附路径）；批准必须用 AskUserQuestion 选项完成（批准/需修改/放弃），禁止手动输入确认；线框选项必须用 preview 展示 ASCII 图。细则见第 10 节。
+- **测试纪律**：单命令≤2 分钟（显式设 ≤120000ms timeout）、整场≤10 分钟、fail-fast 不重跑已绿、迭代只跑受影响测试、禁止后台/监听模式；任务书测试计划表之外的测试禁止执行（`hooks/test-guard.js` 强制）。细则见第 7 节与 `references/testing-rules.md`。
+- **独立审查**：`review: required` 任务必须产出 `review-report.json` 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）方可交付，Stop 钩子强制校验。细则见第 8 节。
+- **冲突处理**：门禁拦截与流程要求冲突（如死锁）时，如实报告冲突详情并等待指示，禁止把"跳过流程"作为推荐选项；`.dev-sop-skip` 仅在用户明确要求时创建。
 
-## 阶段 1：需求澄清访谈
+## 被门禁拦截时
 
-**不许臆测任何未确认的需求。** 凡是用户没有明确说过的，都必须问。
-
-- 必须使用 `AskUserQuestion` 分批提问，**每批不超过 4 个问题**，按下面的维度覆盖（可多轮）：
-  1. **目标用户与使用场景**：谁用、在什么场景下用、要解决什么问题。
-  2. **核心功能清单**：必须有 / 最好有的功能，分别是什么。
-  3. **界面外观与交互预期**：样式风格（如极简 / 拟物 / 深色）、布局结构、配色偏好、可参考的产品或截图。
-  4. **非功能要求**：性能、运行平台（Web / 桌面 / 移动 / CLI）、语言、存储、依赖限制。
-  5. **边界情况**：异常输入、空数据、大并发、离线、权限等如何处理。
-  6. **验收标准**：什么算"做完了"，如何验证。
-- **外观与功能未被描述清楚之前，不得进入阶段 2。**
-- 访谈结束后，把全部问答整理成结构化**需求列表**，再交给用户做最终确认（可用 AskUserQuestion 或直接请用户回复确认）。
-
-## 阶段 2：联网调研
-
-在写规格前，用 `WebSearch` / `WebFetch` 查证：
-
-- 该类软件的**成熟案例与交互惯例**（主流产品怎么做、有哪些约定俗成的交互）。
-- **技术选型的当前最佳实践**（推荐什么框架 / 库 / 架构，及其取舍原因，注意时效性）。
-- 相关**官方文档**（API、配置、版本兼容性）。
-
-要求：**所有关键结论必须附来源链接**；区分"文档明确说明"与"社区观点"；对不确定的信息标注为待验证，不要编造链接。
-
-## 阶段 3：产出规格文档
-
-写入 `docs/specs/<slug>.md`（slug 为需求英文短名，如 `todo-app.md`）。该路径在白名单内，可直接写。
-
-frontmatter 必须是（**必须位于文件第 1 行**，`---` 之前不得有标题或空行，否则门禁无法识别 status）：
-
-```yaml
----
-status: draft
-slug: <slug>
-date: <YYYY-MM-DD>
-review: required
----
-```
-
-其中 `review: required` 为新项目默认值：交付前必须经独立代码审查（阶段 4.5）；纯文档/微小任务可改为 `review: exempt`，存量 spec 不写该字段则完全不受影响。
-
-必填 frontmatter 字段（批准前必填；与 UI 任务的 `ui-files` 并列）：
-
-- `code-files: <逗号分隔的项目相对路径>`：声明本次任务的目标代码文件（如 `code-files: src/app.js, src/utils.js`）。**批准前必填**：`status` 改为 `approved` 后，若既未声明 `code-files` 也未声明 `ui-files`，Stop 钩子（`hooks/accept-check.js`）会拦截交付并要求补声明。纯文档/调研任务显式写 `code-files: none`（值不区分大小写，视为已声明但无代码产出，跳过 test-report 要求）。声明代码文件后，若这些文件已实现，Stop 钩子会强制校验 `docs/specs/<slug>.test-report.json`（验收测试报告，见阶段 4）。
-
-正文必须包含：
-
-1. **需求规格**：阶段 1 中用户确认过的内容（原文照录要点，不擅自扩展）。
-2. **调研结论与来源**：阶段 2 的结论 + 链接列表。
-3. **技术方案**：技术选型、目录结构、模块划分、关键接口 / 数据结构。
-4. **测试计划（TDD）**：先写哪些测试、每个测试验证什么行为、如何运行。
-5. **验收标准 checklist**：`- [ ]` 形式的可勾选条目。
-
-写完请**用户审阅**。用户明确批准后，把 `status: draft` 改为 `status: approved`（**这一步会解锁代码门禁**）；未批准前不要改动其他文件。
-
-### 呈现与批准规范（阶段 3）
-
-- 规格文档在请求批准前，必须把**全文完整呈现在回复中**（长文档可分节完整展示，并附文件路径供用户在编辑器/面板打开核对）。
-- 批准必须通过 `AskUserQuestion` 的**选项**完成（如 批准 / 需修改 / 放弃），**禁止让用户手动输入确认消息**。
-
-## 阶段 3.2：UI 规格（任务涉及界面时必做）
-
-**触发条件**：任务涉及任何界面——网页（HTML/CSS/Vue/React 等）、桌面 GUI、LVGL 嵌入式界面或布局绘制。
-
-**必须先读设计规范**：`references/design-rules.md`（位于 dev-sop 插件安装目录下，含硬校验量化规则与软指导）。
-
-spec 中（在阶段 3 的规格文档基础上）必须额外包含 **UI 数据表** 与 **ASCII 线框图**：
-
-1. **屏幕/画布规格**：目标尺寸、分辨率、色彩深度（嵌入式尤其要写明屏幕像素规格）。
-2. **布局策略**：Flex/Grid 优先（LVGL 用 `lv_obj_set_flex_*`）；每个使用绝对坐标的组件必须说明理由（如弹窗/悬浮层）。
-3. **组件清单表**：每个 UI 组件一行，含 id、布局规则或坐标、尺寸、层级（zIndex/创建顺序）、状态（默认/悬停/禁用等）。
-4. **ASCII 线框图**：用字符画表达整体布局与组件位置关系。
-
-**线框审批（必须单独询问批准）**：必须用 `AskUserQuestion` 的 **preview 功能**给出**至少 2 个**线框方案供用户选择，
-获得用户对线框的**明确批准**后，才把 spec frontmatter 加上 `wireframe: approved`（此标记是 UI 文件门禁的解锁钥匙，
-与 `status` 独立——没有它，`hooks/gate.js` 会拦截所有 .html/.css/.vue/.jsx/.tsx 等界面文件及 LVGL 相关 .c 的写入）。
-**不得把线框批准与 spec 整体确认合并为一次提问**——线框批准是一次独立、专门的 AskUserQuestion。
-
-### 呈现与批准规范（阶段 3.2）
-
-- 线框 spec 在请求批准前，必须把**全文完整呈现在回复中**（长文档可分节完整展示，并附文件路径供用户在编辑器/面板打开核对）。
-- 批准必须通过 `AskUserQuestion` 的**选项**完成（如 批准 / 需修改 / 放弃），**禁止让用户手动输入确认消息**。
-- 线框选项必须用 **preview 展示 ASCII 图**，让用户直观对比方案。
-
-**ui-files 声明**：UI 任务必须在 spec frontmatter 额外写明 `ui-files: <逗号分隔的项目相对路径>`
-（LVGL 任务列出 .c 文件），例如：
-
-```yaml
----
-status: approved
-wireframe: approved
-ui-files: src/ui/main.html, src/ui/style.css
----
-```
-
-**UI 量化验收（阶段 4 的附加项）**：
-
-- **Web**：实现后用内置浏览器打开页面，eval 插件目录下的 `hooks/ui-collect.js` 采集 JSON——
-  **至少采两个视口：默认宽度 + 一个非默认宽度**（如 375px 与 1280px），逐份运行
-  `node hooks/ui-analyzer.mjs <geometry.json> --out docs/specs/<slug>.ui-report.json`（--out 会把多次结果
-  汇总进同一报告文件），**error 清零**才算完成；warning 逐条说明取舍。
-- **LVGL**：运行 `node hooks/lvgl-check.mjs <ui.c> ... --out docs/specs/<slug>.ui-report.json`，**error 清零**。
-- **强制交付物**：实现完成后必须产出 `docs/specs/<slug>.ui-report.json`（双视口/多文件全量 error=0）。
-  Stop 钩子（`hooks/accept-check.js`）会校验该文件存在且全部 error=0，否则无法结束交付。
-- 截图仅作为人工复核的可选附件，不作为判定依据。
-
-注意：上述 `hooks/ui-analyzer.mjs`、`hooks/lvgl-check.mjs`、`references/design-rules.md` 均位于
-dev-sop 插件安装目录（即本 SKILL.md 所在插件的 hooks/、references/ 子目录），使用时按插件实际安装路径引用。
-
-## 阶段 3.5：任务书（spec 批准之后、委派 code-worker 之前）
-
-spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任务书** `docs/tasks/<slug>.md`（与 spec 同 slug，可用序号后缀区分多个任务，如 `<slug>-01.md`），至少包含：
-
-1. **目标文件清单**：本次要新建 / 修改的每个文件的绝对或项目内相对路径。
-2. **期望行为**：每个文件/模块应实现的行为描述（逐条、可验证）。
-3. **验收标准**：如何验证改对了（具体命令、期望输出、检查点）。
-4. **测试要求**：需要先写的测试、覆盖的场景、测试运行命令。
-5. **验收测试计划表**（必须）：逐条对应 spec 的验收标准，**固定为五列 markdown 表格**（验收标准 / 测试层级 / 命令 / 预期输出 / 预计耗时），示例：
-
-   | 验收标准 | 测试层级(静态/单元/集成/浏览器) | 命令 | 预期输出 | 预计耗时 |
-   | --- | --- | --- | --- | --- |
-   | 数字/浮点/true/false/空串正确推断类型 | 单元 | python -m pytest tests/test_csv2json.py -q | 9 passed in 1.5s | 10s |
-   | 文件不存在时报错且退出码为 1 | 集成 | python csv2json.py no-such-file.csv | stderr 含"文件不存在"，退出码 1 | 5s |
-
-   并在任务书中显式声明：**本表之外的测试禁止执行**。
-6. **参考**：关联的 spec 路径与章节（如 `docs/specs/<slug>.md#阶段3`）。
-
-委派要求：
-- 委派 `Agent`（code-worker）的 prompt 中必须**显式写出任务书与 spec 的相对路径**，例如 `docs/tasks/<slug>.md`、`docs/specs/<slug>.md`。
-- prompt 中不得包含技术决策类问题，决策由主会话完成；code-worker 只执行。
-- 未引用 `docs/specs/` 或 `docs/tasks/` 路径的委派会被 PreToolUse hook 直接拦截（exit 2）。
-
-## 阶段 4：TDD 实现 + 自审
-
-1. **先写测试（TDD）**：在写任何业务代码前，创建测试文件（路径含 `test` 的文件在白名单内，可正常写入），覆盖任务书与 spec 中的验收标准；先确认测试因功能缺失而失败，再写实现。
-2. **再实现**：写业务代码，直到测试全部通过；严格按任务书的期望行为实现，不多做、不少做。
-3. **跑测试**：执行测试命令，确保全绿；有失败就修到绿为止。失败不得通过注释、跳过测试或空实现来"通过"。测试执行必须遵循 `references/testing-rules.md`（dev-sop 插件安装目录）的测试纪律：金字塔分层（静态→单元→集成→浏览器，后者仅 UI 验收项且最后最少跑）、单命令 ≤2 分钟显式设 timeout、整场 ≤10 分钟、fail-fast 首败即停从失败处续跑、迭代修复只跑受影响测试、禁止后台/监听模式长跑（`hooks/test-guard.js` 强制拦截）。
-4. **对抗性自审**：完成后对全部改动逐项检查，假设自己是审查者，主动攻击自己的实现——
-   - 逻辑 bug（边界、空值、错误分支、状态竞态）
-   - 性能问题（无谓循环、重复 IO、阻塞调用、内存增长）
-   - 安全问题（注入、路径穿越、敏感信息泄露、权限缺失）
-   - 与规格不符项（漏实现、多做、行为偏差）
-   发现的问题先修复再汇报。
-5. **汇报**：说明改了哪些文件、执行了什么命令、结果如何，并**逐条勾选验收标准**（`- [x]` / `- [ ]` 并说明未完成原因）。
-6. **产出验收测试报告**：交付前按任务书验收测试计划表逐条执行并记录，产出 `docs/specs/<slug>.test-report.json`，结构为：
-
-   ```json
-   {
-     "records": [
-       { "item": "<验收标准描述>", "command": "<实际执行的命令>", "durationMs": 1234, "result": "pass" }
-     ],
-     "summary": { "passed": 3, "failed": 0 }
-   }
-   ```
-
-   要求：JSON 合法、records 非空、每条 `result` 为 `"pass"`、`summary.failed` 为 0。spec frontmatter 声明了 `code-files` 且代码文件已实现时，Stop 钩子（`hooks/accept-check.js`）会强制校验该报告，未通过无法结束交付。测试执行纪律见 `references/testing-rules.md`。
-
-## 阶段 4.5：独立代码审查（reviewer）
-
-实现与量化验收（阶段 4，含 test-report / ui-report 合规）完成后，进入独立审查阶段。审查者必须是**全新委派的 reviewer 子代理**（插件内置 `agents/reviewer.md`，代理名 `dev-sop:reviewer`：独立上下文 fresh-eyes、只读、开思考、`injectAgentsMd: false` 保持中立），**不得**由主会话自任，更不得由实现该代码的 code-worker 自审代替。
-
-流程（六步，严格顺序）：
-
-1. **前置就绪**：code-worker 完成实现并自审通过（阶段 4 全部完成，验收测试报告/量化验收报告合规）；
-2. **委派 reviewer**：主会话用 Agent 工具委派 reviewer 子代理，委派 prompt 必须提供四项：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、目标文件清单、报告输出路径（`docs/specs/<slug>.review-report.json`）；
-3. **回读报告**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告；
-4. **修复（仅 fail 触发修复循环）**：verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；
-5. **重审（最多 2 轮）**：`fail` 修复后重新委派 reviewer 审查（新报告覆盖旧报告）；最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；
-6. **用户确认**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**，经用户确认后方可定稿——不强制进入修复循环。
-
-审查报告结构（`docs/specs/<slug>.review-report.json`）：
-
-```json
-{
-  "verdict": "pass|pass-with-issues|fail",
-  "issues": [
-    { "severity": "P0|P1|P2", "file": "", "line": 0, "dim": "符合度|缺陷|安全性能|测试", "desc": "", "suggestion": "" }
-  ],
-  "summary": { "p0": 0, "p1": 0, "p2": 0, "checked": ["逐条验收标准勾选"] }
-}
-```
-
-verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fail`；P1 ≥ 3 → `fail`；仅 P2 或 P1 ≤ 2 → `pass-with-issues`；全清 → `pass`。
-
-**spec frontmatter `review` 字段说明：**
-
-- `review: required`：声明该 spec 交付必须经独立审查。当其 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规时，Stop 钩子（`hooks/accept-check.js`，第五把钥匙）强制校验 `docs/specs/<slug>.review-report.json` 存在、JSON 合法且 `verdict` 为 `pass` 或 `pass-with-issues`，否则无法结束交付（`fail`/未知取值/报告缺失/非法 JSON 均阻断；`pass-with-issues` 须经第 6 步向用户呈报问题清单并经确认后定稿）。新项目 spec 默认加 `review: required`（阶段 3 模板已内置该行）。
-- `review: exempt`：纯文档/微小任务可显式声明豁免，视为无审查要求。
-- 存量 spec 不写 `review` 字段则完全不受影响。
-
-## 附：被门禁拦截时
-
-如果收到 "当前项目没有已批准的规格文档" 的拒绝：
-- 正常情况下：回到阶段 1，按本流程推进。
-- 用户明确要求跳过时：提示其在项目根创建 `.dev-sop-skip` 文件；访谈与审批完成后删除该文件以恢复门禁。
-
-如果收到 "委派任务前请先走 /spec 流程…" 的拒绝：
-- 说明本次 `Agent` / `Task` 委派的 prompt 没有引用 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径。
-- 处理：完成阶段 3.5 产出任务书，并在委派 prompt 中写明 `docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md` 的相对路径后重新委派；不要绕过门禁。
-
-## 附：执行日志
-
-每次 hook 调用都会向 `~/.zcode/hooks/dev-sop.log` 追加一行：
-
-```
-ISO时间 | 事件=PreToolUse | tool=工具名 | target=目标文件或(agent) | decision=allow|deny|error | reason=简要原因
-```
-
-UserPromptSubmit 事件使用 `decision=inject|pass`。排查门禁误拦或未触发时，先看该日志。
+- 收到"没有已批准的规格文档"→ 回到阶段 1 推进；用户明确要求跳过时提示创建 `.dev-sop-skip`（完成后删除恢复门禁）。
+- 收到"委派任务前请先走 /spec 流程"→ prompt 补引 `docs/specs/*.md` 或 `docs/tasks/*.md` 路径后重新委派。
+- 排查门禁误拦/未触发：看执行日志 `~/.zcode/hooks/dev-sop.log`（UserPromptSubmit 注入 v1.2.0 起 decision=inject-full/inject-reminder/inject/pass）。细则：stages-detail.md 第 12 节。

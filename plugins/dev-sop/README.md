@@ -1,4 +1,4 @@
-# dev-sop：开发 SOP 门禁（v1.1.1）
+# dev-sop：开发 SOP 门禁（v1.2.0）
 
 让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。
 
@@ -23,7 +23,7 @@
 
 配合三道软机制：
 
-- **每轮上下文注入**（`hooks/inject.js`）：检测到开发意图的提示词时，自动注入七阶段流程提醒。
+- **每轮上下文注入**（`hooks/inject.js`）：检测到开发意图的提示词时，自动注入七阶段流程提醒；v1.2.0 起带会话级注入闩锁——同一会话首轮注入全文，次轮起仅注入一行提醒（闩锁文件 `~/.zcode/hooks/dev-sop-inject-<sessionId>.latch`，48h 自动清理），显著节流。
 - **执行代理**（`agents/code-worker.md`）：主会话只决策，编码一律委派给禁用思考、只执行不决策的 code-worker 子代理。
 - **对抗性审查**（`agents/reviewer.md`）：实现与量化验收完成后，委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿，见 SKILL 阶段 4.5）。
 
@@ -42,18 +42,19 @@
 | 组件 | 作用 |
 | --- | --- |
 | `hooks/gate.js` | PreToolUse 门禁：无 approved spec 拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书路径拦截 Agent 委派 |
-| `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把七阶段流程提醒注入上下文 |
+| `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把七阶段流程提醒注入上下文；同会话闩锁去重（首轮全文、次轮一行提醒，详见上文注入闩锁机制） |
 | `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）才能结束交付 |
 | `hooks/ui-collect.js` | 浏览器内 eval 采集页面几何数据（多视口）为 JSON |
 | `hooks/ui-analyzer.mjs` | 量化分析几何 JSON：越界/重叠/44px 点击区/对比度等，生成 ui-report.json |
 | `hooks/lvgl-check.mjs` | LVGL C 源码静态量化校验，生成同一格式的 ui-report.json |
 | `hooks/test-guard.js` | PreToolUse on Bash 门禁：测试命令单条 ≤2 分钟、禁止后台/监听模式长跑（`references/testing-rules.md` 的强制执行器） |
 | `references/testing-rules.md` | 内置测试纪律：测试金字塔分层、耗时硬预算、fail-fast、受影响测试选择、反冗余 |
+| `references/stages-detail.md` | 七阶段完整实施细则（v1.2.0）：SKILL 正文只留流程骨架，各阶段细则逐节下沉于此，按需查阅 |
 | `references/design-rules.md` | 内置设计规范：硬校验量化规则与软指导（Flex/Grid 优先等） |
 | `agents/code-worker.md` | 执行代理定义：禁用思考、只执行不决策，是唯一写代码的角色 |
 | `agents/reviewer.md` | 审查代理定义：独立上下文、只读（唯一可写 review-report.json），对照任务书做符合度/缺陷/安全性能/测试四维审查，第五把钥匙的执行者 |
 | `commands/spec.md` | `/spec` 命令：手动进入规格驱动流程的入口 |
-| `skills/dev-sop/SKILL.md` | 七阶段完整流程说明书（技能入口） |
+| `skills/dev-sop/SKILL.md` | 七阶段流程骨架说明书（技能入口；细则在 `references/stages-detail.md`） |
 
 ## 逃生阀与边界
 
