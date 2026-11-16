@@ -10,6 +10,10 @@
 //    若任一代码文件已实现，则强制要求 docs/specs/<slug>.test-report.json
 //    存在、结构完整（records 非空、每条 result=pass、summary.failed=0），
 //    否则 block。
+// 3) 检测 docs/specs/*.md frontmatter 含 review: required 的 spec（exempt/none/缺省
+//    均不触发）：若 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规，
+//    则强制要求 docs/specs/<slug>.review-report.json 存在、JSON 合法且 verdict=pass，
+//    否则 block（第五把钥匙）。
 
 const fs = require('fs');
 const os = require('os');
@@ -244,6 +248,99 @@ function checkTestReport(reportPath) {
   return null;
 }
 
+// 解析 frontmatter 逗号分隔文件列表（去成对引号与空白，过滤空串）
+function parseFileList(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean);
+}
+
+// 找出 frontmatter 含 review: required 的 spec（review: exempt/none/缺省均不触发）。
+// noneAsEmpty 语义同 findSpecsWithFiles：code-files 值恰为 none（不区分大小写）视为
+// 已声明但无代码产出，过滤为空。返回 { slug, codeFiles, uiFiles, files }（files 为并集）。
+function findReviewSpecs(projectRoot) {
+  const specsDir = path.join(projectRoot, 'docs', 'specs');
+  if (!existsSyncSafe(specsDir)) return [];
+  let entries;
+  try {
+    const stat = fs.statSync(specsDir);
+    if (!stat.isDirectory()) return [];
+    entries = fs.readdirSync(specsDir, { withFileTypes: true });
+  } catch (e) {
+    return [];
+  }
+  const specs = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (path.extname(entry.name).toLowerCase() !== '.md') continue;
+    const fm = readFrontmatter(path.join(specsDir, entry.name));
+    if (!fm) continue;
+    if (!new RegExp('^review\\s*:\\s*["\']?required["\']?\\s*$', 'mi').test(fm)) continue;
+    const slugField = frontmatterField(fm, 'slug');
+    const slug = slugField || entry.name.replace(/\.md$/i, '');
+    const codeFiles = parseFileList((fm.match(/^code-files\s*:\s*(.+)$/mi) || [])[1])
+      .filter((f) => f.toLowerCase() !== 'none');
+    const uiFiles = parseFileList((fm.match(/^ui-files\s*:\s*(.+)$/mi) || [])[1]);
+    specs.push({ slug, codeFiles, uiFiles, files: codeFiles.concat(uiFiles) });
+  }
+  return specs;
+}
+
+// ---- Reviewer 判定规则纯函数（规格 docs/specs/code-review.md 2.1）----
+
+// 按 issues 判定 verdict：任一 P0 → fail；P1 ≥ 3 → fail；
+// 仅 P2 或 P1 ≤ 2 → pass-with-issues；全清（无任何问题）→ pass。
+// severity 大小写不敏感；null/非对象条目忽略；issues 非数组视为无问题。
+function computeVerdictFromIssues(issues) {
+  const list = Array.isArray(issues) ? issues : [];
+  let p0 = 0;
+  let p1 = 0;
+  let p2 = 0;
+  for (const it of list) {
+    if (!it || typeof it !== 'object') continue;
+    const sev = String(it.severity || '').trim().toUpperCase();
+    if (sev === 'P0') p0++;
+    else if (sev === 'P1') p1++;
+    else if (sev === 'P2') p2++;
+  }
+  if (p0 > 0) return 'fail';
+  if (p1 >= 3) return 'fail';
+  if (p0 + p1 + p2 > 0) return 'pass-with-issues';
+  return 'pass';
+}
+
+// 报告对象 → 生效 verdict：缺 verdict 字段、非字符串取值、未知取值或非法输入
+// （null/非对象/数组）一律按 'fail' 处理（第五把钥匙据此阻断）。
+function effectiveReportVerdict(report) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return 'fail';
+  if (typeof report.verdict !== 'string') return 'fail';
+  const v = report.verdict.trim();
+  if (v === 'pass' || v === 'pass-with-issues' || v === 'fail') return v;
+  return 'fail';
+}
+
+// 校验 <slug>.review-report.json，返回 null 表示通过，否则返回中文失败原因
+function checkReviewReport(reportPath) {
+  if (!existsSyncSafe(reportPath)) {
+    return '缺少代码审查报告 ' + reportPath;
+  }
+  let report;
+  try {
+    report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  } catch (e) {
+    return '代码审查报告不是合法 JSON：' + reportPath;
+  }
+  if (effectiveReportVerdict(report) !== 'pass') {
+    const raw =
+      report && typeof report === 'object' && !Array.isArray(report) && typeof report.verdict === 'string'
+        ? report.verdict
+        : '缺失';
+    return '代码审查报告 verdict=' + raw + '（必须为 pass）：' + reportPath;
+  }
+  return null;
+}
+
 function block(reason) {
   process.stdout.write(JSON.stringify({ decision: 'block', reason }) + '\n');
   appendLog('Stop', 'block', reason);
@@ -360,15 +457,56 @@ async function main() {
     }
   }
 
-  appendLog('Stop', 'allow', 'ui/code acceptance ok or nothing implemented');
+  // ---- 代码审查检查（review: required 的 spec，第五把钥匙）----
+  let reviewSpecs;
+  try {
+    reviewSpecs = findReviewSpecs(projectRoot);
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to scan specs: ' + (e && e.message) + '\n');
+    appendLog('Stop', 'error', 'scan review specs: ' + (e && e.message));
+    return 0;
+  }
+
+  for (const spec of reviewSpecs) {
+    const existingCode = spec.codeFiles.filter((f) => existsSyncSafe(path.resolve(projectRoot, f)));
+    const existingUi = spec.uiFiles.filter((f) => existsSyncSafe(path.resolve(projectRoot, f)));
+    if (existingCode.length === 0 && existingUi.length === 0) continue; // 尚未实现，不因 review 阻断
+    // 前置：test-report/ui-report 未合规时由前面的 ui/code 检查负责拦截，不在 review 维度重复报
+    if (existingCode.length > 0 &&
+        checkTestReport(path.join(projectRoot, 'docs', 'specs', spec.slug + '.test-report.json')) !== null) continue;
+    if (existingUi.length > 0 &&
+        checkReport(path.join(projectRoot, 'docs', 'specs', spec.slug + '.ui-report.json')) !== null) continue;
+    const reportPath = path.join(projectRoot, 'docs', 'specs', spec.slug + '.review-report.json');
+    const failure = checkReviewReport(reportPath);
+    if (failure) {
+      return block(
+        'spec "' + spec.slug + '" 已声明 review: required 且量化验收已通过，但独立代码审查未通过（' + failure + '）。' +
+        '必须：按 SKILL 阶段 4.5 委派 reviewer 子代理（插件内置，独立上下文、只读）对照任务书做四维审查，' +
+        '报告写入 docs/specs/' + spec.slug + '.review-report.json 且 verdict=pass 后方可交付；' +
+        '纯文档/微小任务可在 spec frontmatter 显式声明 review: exempt 豁免。'
+      );
+    }
+  }
+
+  appendLog('Stop', 'allow', 'ui/code/review acceptance ok or nothing implemented');
   return 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (err) => {
-    process.stderr.write('[dev-sop] internal error: ' + (err && err.stack ? err.stack : err) + '\n');
-    appendLog('Stop', 'error', 'internal error: ' + (err && err.message ? err.message : err));
-    process.exit(0);
-  }
-);
+// 直接运行时执行门禁；被 require（单测）时仅导出纯函数与检查器
+if (require.main === module) {
+  main().then(
+    (code) => process.exit(code),
+    (err) => {
+      process.stderr.write('[dev-sop] internal error: ' + (err && err.stack ? err.stack : err) + '\n');
+      appendLog('Stop', 'error', 'internal error: ' + (err && err.message ? err.message : err));
+      process.exit(0);
+    }
+  );
+}
+
+module.exports = {
+  computeVerdictFromIssues,
+  effectiveReportVerdict,
+  checkReviewReport,
+  findReviewSpecs,
+};

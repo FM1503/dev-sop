@@ -87,8 +87,9 @@
     padding: 2px 6px;
   }
   .stage .gate.key { background: rgba(224, 175, 104, 0.15); color: var(--key); }
-  /* 三把钥匙 */
-  .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  /* 五把钥匙 */
+  .keys { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .keys { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 700px) { .keys { grid-template-columns: 1fr; } }
   .keycard {
     background: var(--card);
@@ -180,7 +181,7 @@
     </li>
   </ol>
 
-  <h2>三把硬钥匙</h2>
+  <h2>五把硬钥匙</h2>
   <div class="keys">
     <div class="keycard">
       <div class="k">status: approved</div>
@@ -194,6 +195,14 @@
       <div class="k">&lt;slug&gt;.ui-report.json</div>
       <p>docs/specs/ 下量化验收报告，全部 error=0 才允许结束交付（Stop 钩子）。</p>
     </div>
+    <div class="keycard">
+      <div class="k">&lt;slug&gt;.test-report.json</div>
+      <p>docs/specs/ 下验收测试报告，records 全 pass、failed=0 才允许结束交付（Stop 钩子）。</p>
+    </div>
+    <div class="keycard">
+      <div class="k">&lt;slug&gt;.review-report.json</div>
+      <p>review: required 任务的独立审查报告，verdict=pass 才允许结束交付（Stop 钩子第五把钥匙）。</p>
+    </div>
   </div>
 
   <h2>组件清单</h2>
@@ -201,17 +210,18 @@
     <tr><th>组件</th><th>作用</th></tr>
     <tr><td>hooks/gate.js</td><td>PreToolUse 门禁：无批准 spec / 线框时拦截写入与委派</td></tr>
     <tr><td>hooks/inject.js</td><td>检测开发意图，自动注入流程提醒</td></tr>
-    <tr><td>hooks/accept-check.js</td><td>Stop 门禁：强制 UI 量化验收通过才可交付</td></tr>
+    <tr><td>hooks/accept-check.js</td><td>Stop 门禁：强制 UI 量化验收、验收测试报告与 review: required 审查报告（verdict=pass）通过才可交付</td></tr>
     <tr><td>hooks/ui-collect.js</td><td>浏览器内采集页面几何数据（多视口）</td></tr>
     <tr><td>hooks/ui-analyzer.mjs</td><td>量化分析：越界 / 重叠 / 44px 点击区 / 对比度</td></tr>
     <tr><td>hooks/lvgl-check.mjs</td><td>LVGL 源码静态量化校验</td></tr>
     <tr><td>references/design-rules.md</td><td>内置设计规范（硬规则 + 软指导）</td></tr>
     <tr><td>agents/code-worker.md</td><td>执行代理：只执行不决策的唯一编码角色</td></tr>
+    <tr><td>agents/reviewer.md</td><td>审查代理：独立上下文只读四维审查，产出 review-report.json（第五把钥匙）</td></tr>
     <tr><td>commands/spec.md</td><td>/spec 命令入口</td></tr>
   </table>
 
   <footer>
-    dev-sop v1.0.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
+    dev-sop v1.1.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
   </footer>
 </div>
 </body>

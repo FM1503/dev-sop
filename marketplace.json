@@ -4,7 +4,7 @@
     {
       "name": "dev-sop",
       "source": "./plugins/dev-sop",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "license": "GPL-3.0",
       "description": "Development SOP gate: clarifying interview, web research, approved spec and TDD before any code edit",
       "displayName": "Dev SOP 开发流程门禁",
@@ -12,7 +12,7 @@
         "zh-CN": "Dev SOP 开发流程门禁"
       },
       "description_i18n": {
-        "zh-CN": "开发流程 SOP 门禁：需求澄清、调研、规格与线框审批、任务书与测试计划、TDD、UI量化验收、测试预算纪律与内置执行代理"
+        "zh-CN": "规格驱动开发SOP：需求澄清、调研、规格与线框审批、任务书与测试计划、TDD、UI量化验收、测试预算纪律、独立代码审查与内置执行代理"
       },
       "category": "developer-tools"
     }
