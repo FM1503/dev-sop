@@ -27,17 +27,17 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 新功能 / 新项目需求进入本流程；用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。细则：stages-detail.md 第 1 节。
 
-### 阶段 1：需求澄清访谈
+### 阶段 1：需求澄清访谈（调研与访谈并行）
 
-用 AskUserQuestion 分至少 2 批（每批≤4问）覆盖六大维度（场景 / 功能清单 / 界面外观与交互 / 非功能 / 边界 / 验收标准），**不许臆测任何未确认的需求**；访谈后整理结构化需求列表交用户最终确认。关键约束：外观与功能未被描述清楚前不得进入阶段 2。细则：stages-detail.md 第 2 节。
+用 AskUserQuestion 分至少 2 批（每批≤4问）覆盖六大维度（场景 / 功能清单 / 界面外观与交互 / 非功能 / 边界 / 验收标准），**不许臆测任何未确认的需求**；第一批答复后同轮先发 WebSearch 再发第二批（调研与访谈并行）；访谈后整理结构化需求列表交用户最终确认。关键约束：外观与功能未被描述清楚前不得进入阶段 2。细则：stages-detail.md 第 2 节。
 
 ### 阶段 2：联网调研
 
 用 WebSearch/WebFetch 查证成熟案例与交互惯例、技术选型当前最佳实践、官方文档；所有关键结论必须附来源链接，区分文档结论与社区观点，不确定信息标注待验证。细则：stages-detail.md 第 3 节。
 
-### 阶段 3：产出规格文档
+### 阶段 3：产出规格文档（用 spec-templates 骨架）
 
-写 `docs/specs/<slug>.md`（frontmatter 必须第 1 行起：status/slug/date/review；批准前必填 `code-files`，纯文档任务写 `code-files: none`），正文五要素：需求规格 / 调研结论与来源 / 技术方案 / 测试计划(TDD) / 验收 checklist；用户批准后 `status: draft` → `status: approved` 解锁代码门禁。细则：stages-detail.md 第 4 节；呈现与批准方式见第 10 节。
+写 `docs/specs/<slug>.md`（frontmatter 必须第 1 行起：status/slug/date/review；批准前必填 `code-files`，纯文档任务写 `code-files: none`）：先按任务类型复制 `references/spec-templates/` 对应模板（cli-tool / web-ui / lvgl）再填充，禁止现编结构；正文五要素：需求规格 / 调研结论与来源 / 技术方案 / 测试计划(TDD) / 验收 checklist；用户批准后 `status: draft` → `status: approved` 解锁代码门禁。细则：stages-detail.md 第 4 节；呈现与批准方式见第 10 节。
 
 ### 阶段 3.2：UI 规格（任务涉及界面时必做）
 
@@ -47,13 +47,13 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 产出 `docs/tasks/<slug>.md`：目标文件清单、期望行为、验收标准、测试要求、**五列验收测试计划表**（验收标准/测试层级/命令/预期输出/预计耗时，表外测试禁止执行）、参考；委派 prompt 必须显式写明任务书与 spec 的相对路径，且不含技术决策类问题。细则：stages-detail.md 第 6 节；表格模板见第 11 节。
 
-### 阶段 4：TDD 实现 + 自审
+### 阶段 4：TDD 实现 + 自审（量化验收自动闭环，≤5轮/10min）
 
-先写测试（test 路径在白名单内）确认因功能缺失而失败，再实现到全绿；完成后对抗性自审（逻辑 bug / 性能 / 安全 / 规格符合度），发现问题先修再报；交付前按测试计划表逐条执行并产出 `docs/specs/<slug>.test-report.json`（records 全 pass、failed=0）。细则：stages-detail.md 第 7 节。
+先写测试（test 路径在白名单内）确认因功能缺失而失败，再实现到全绿；完成后对抗性自审（逻辑 bug / 性能 / 安全 / 规格符合度），发现问题先修再报；交付前按测试计划表逐条执行并产出 `docs/specs/<slug>.test-report.json`（records 全 pass、failed=0）；UI/LVGL 量化验收按单次委派合同**自动闭环**（≤5轮/10min 硬限、--out 落盘、主会话只复核 JSON，合同见第 5 节）。细则：stages-detail.md 第 7 节。
 
-### 阶段 4.5：独立代码审查（reviewer）
+### 阶段 4.5：独立代码审查（reviewer，审查与量化闭环并行，增量主会话快检）
 
-量化验收合规后，委派全新 reviewer 子代理（`agents/reviewer.md`：独立上下文、只读、四维审查、同判定规则），**不得**主会话自任或 code-worker 自审代替。委派 prompt 必须提供：任务书路径、规格路径、**改动文件清单、diff 获取方式**（git 命令或直接附 diff）、报告输出路径 `docs/specs/<slug>.review-report.json`。verdict 判定：任一 P0 或 P1≥3 → fail（整理问题清单委派 code-worker 修复后重审，最多 2 轮，仍 fail 如实呈报用户仲裁，禁止推荐跳过）；仅 P2 或 P1≤2 → pass-with-issues（AskUserQuestion 呈报问题清单，用户确认后定稿）；全清 → pass。`review: required` 的 spec 由 Stop 钩子强制校验报告存在且 verdict 合规。细则：stages-detail.md 第 8 节。
+实现完成后**同一条消息**并发两个 Agent 调用——全新 reviewer 子代理（`agents/reviewer.md`：独立上下文、只读、四维审查、同判定规则，审查输入=委派时冻结的初版改动清单）+ 量化闭环，**不得**主会话自任或 code-worker 自审代替。闭环回报后主会话快检增量 diff：仅 P0/P1 追加一轮增量快审（仅增量），P2 记 backlog。委派 prompt 必须提供：任务书路径、规格路径、**改动文件清单、diff 获取方式**（`git diff HEAD~1..HEAD`，或主会话指明 range；首次提交（无上一提交）用 `git diff --no-index` 或直接附改动清单与内容）、报告输出路径 `docs/specs/<slug>.review-report.json`。verdict 判定：任一 P0 或 P1≥3 → fail（整理问题清单委派 code-worker 修复后重审，最多 2 轮，仍 fail 如实呈报用户仲裁，禁止推荐跳过）；仅 P2 或 P1≤2 → pass-with-issues（AskUserQuestion 呈报问题清单，用户确认后定稿）；全清 → pass。`review: required` 的 spec 由 Stop 钩子强制校验报告存在且 verdict 合规。细则：stages-detail.md 第 8 节。
 
 ## 决策层 / 执行层分离
 

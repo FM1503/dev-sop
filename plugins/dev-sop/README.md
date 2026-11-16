@@ -1,4 +1,4 @@
-# dev-sop：开发 SOP 门禁（v1.2.0）
+# dev-sop：开发 SOP 门禁（v1.3.0）
 
 让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。
 
@@ -25,7 +25,7 @@
 
 - **每轮上下文注入**（`hooks/inject.js`）：检测到开发意图的提示词时，自动注入七阶段流程提醒；v1.2.0 起带会话级注入闩锁——同一会话首轮注入全文，次轮起仅注入一行提醒（闩锁文件 `~/.zcode/hooks/dev-sop-inject-<sessionId>.latch`，48h 自动清理），显著节流。
 - **执行代理**（`agents/code-worker.md`）：主会话只决策，编码一律委派给禁用思考、只执行不决策的 code-worker 子代理。
-- **对抗性审查**（`agents/reviewer.md`）：实现与量化验收完成后，委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿，见 SKILL 阶段 4.5）。
+- **对抗性审查**（`agents/reviewer.md`）：实现完成后进入审查（审查与量化验收闭环可并行执行，见 SKILL 阶段 4.5），委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿）。
 
 ## 七阶段工作流程
 
@@ -36,6 +36,8 @@
 │  (≥2批)   │   │ 附来源链接 │   │ + 选项批准    │   │ (preview 选择) │   │          │   │          │   │                │
 └──────────┘   └──────────┘   └──────────────┘   └────────────────┘   └──────────┘   └──────────┘   └────────────────┘
 ```
+
+> v1.3.0 提效：阶段 1 内**调研与访谈并行**（首批答复后同轮先发 WebSearch）；阶段 5 量化验收改为**单次委派自动闭环**（采集→分析→修复→复测，≤5 轮 / 10 分钟硬限，主会话只复核报告 JSON）；阶段 5 与独立审查**同消息并发**，闭环增量由主会话快检（仅 P0/P1 追加增量快审，P2 记 backlog）。
 
 ## 组件清单
 
@@ -51,6 +53,7 @@
 | `references/testing-rules.md` | 内置测试纪律：测试金字塔分层、耗时硬预算、fail-fast、受影响测试选择、反冗余 |
 | `references/stages-detail.md` | 七阶段完整实施细则（v1.2.0）：SKILL 正文只留流程骨架，各阶段细则逐节下沉于此，按需查阅 |
 | `references/design-rules.md` | 内置设计规范：硬校验量化规则与软指导（Flex/Grid 优先等） |
+| `references/spec-templates/` | 三类 spec 骨架模板（cli-tool / web-ui / lvgl，v1.3.0）：阶段 3 按任务类型复制到 `docs/specs/<slug>.md` 再填充，禁止现编结构 |
 | `agents/code-worker.md` | 执行代理定义：禁用思考、只执行不决策，是唯一写代码的角色 |
 | `agents/reviewer.md` | 审查代理定义：独立上下文、只读（唯一可写 review-report.json），对照任务书做符合度/缺陷/安全性能/测试四维审查，第五把钥匙的执行者 |
 | `commands/spec.md` | `/spec` 命令：手动进入规格驱动流程的入口 |

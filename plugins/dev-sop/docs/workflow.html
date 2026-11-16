@@ -133,7 +133,7 @@
     <li class="stage">
       <span class="num">1</span>
       <h3>需求澄清访谈</h3>
-      <div class="acts">AskUserQuestion 分至少 2 批提问（每批 ≤4 问），覆盖功能、外观、非功能、边界与验收。</div>
+      <div class="acts">AskUserQuestion 分至少 2 批提问（每批 ≤4 问），覆盖功能、外观、非功能、边界与验收；首批答复后同轮先发 WebSearch——调研与访谈并行。</div>
       <div class="out">产出：结构化需求列表</div>
       <span class="gate">禁止臆测</span>
     </li>
@@ -175,7 +175,7 @@
     <li class="stage">
       <span class="num">5</span>
       <h3>量化验收 + 对抗自审</h3>
-      <div class="acts">UI 用 ui-analyzer / lvgl-check 量化校验 error 清零；代码对抗性自审。</div>
+      <div class="acts">UI 用 ui-analyzer / lvgl-check 单次委派自动闭环（采集→分析→修复→复测，≤5 轮 / 10 分钟）；与独立审查同消息并发，增量由主会话快检。</div>
       <div class="out">产出：&lt;slug&gt;.ui-report.json</div>
       <span class="gate key">error = 0</span>
     </li>
@@ -221,7 +221,7 @@
   </table>
 
   <footer>
-    dev-sop v1.2.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
+    dev-sop v1.3.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
   </footer>
 </div>
 </body>

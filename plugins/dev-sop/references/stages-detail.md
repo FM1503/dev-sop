@@ -37,6 +37,7 @@
   5. **边界情况**：异常输入、空数据、大并发、离线、权限等如何处理。
   6. **验收标准**：什么算"做完了"，如何验证。
 - **外观与功能未被描述清楚之前，不得进入阶段 2。**
+- **调研∥访谈（v1.3.0 并行提效）**：第一批 AskUserQuestion 答复回来后，**同一轮**先发 1-2 个 WebSearch 查询（针对已答复内容中可调研的关键点），再发第二批提问——用调研请求覆盖用户思考第二批问题的时间，重叠两段等待；后续批次同理可穿插。该并行不改变阶段顺序约束：正式的调研结论与来源整理仍在阶段 2 完成。
 - 访谈结束后，把全部问答整理成结构化**需求列表**，再交给用户做最终确认（可用 AskUserQuestion 或直接请用户回复确认）。
 
 ## 第 3 节：阶段 2 联网调研
@@ -69,6 +70,8 @@ review: required
 必填 frontmatter 字段（批准前必填；与 UI 任务的 `ui-files` 并列）：
 
 - `code-files: <逗号分隔的项目相对路径>`：声明本次任务的目标代码文件（如 `code-files: src/app.js, src/utils.js`）。**批准前必填**：`status` 改为 `approved` 后，若既未声明 `code-files` 也未声明 `ui-files`，Stop 钩子（`hooks/accept-check.js`）会拦截交付并要求补声明。纯文档/调研任务显式写 `code-files: none`（值不区分大小写，视为已声明但无代码产出，跳过 test-report 要求）。声明代码文件后，若这些文件已实现，Stop 钩子会强制校验 `docs/specs/<slug>.test-report.json`（验收测试报告，见第 7 节）。
+
+**模板选用（v1.3.0 起强制）**：写规格前，按任务类型从 dev-sop 插件安装目录 `references/spec-templates/` **复制对应骨架模板**到 `docs/specs/<slug>.md` 再填充——CLI / 脚本类用 `cli-tool.md`，Web 界面类用 `web-ui.md`，LVGL 嵌入式界面类用 `lvgl.md`。模板已内置 frontmatter 字段、章节骨架、五列测试计划表头（web-ui 另含 UI 数据表与 ASCII 线框占位，lvgl 含屏幕规格与布局策略占位），**禁止现编 spec 结构**；模板未覆盖的内容在对应章节内追加，不另立章节结构。
 
 正文必须包含：
 
@@ -110,18 +113,25 @@ ui-files: src/ui/main.html, src/ui/style.css
 ---
 ```
 
-**UI 量化验收（第 7 节的附加项）**：
+**UI 量化验收自动闭环（第 7 节的附加项，v1.3.0 起改为单次委派自动闭环）**：
 
-- **Web**：实现后用内置浏览器打开页面，eval 插件目录下的 `hooks/ui-collect.js` 采集 JSON——
-  **至少采两个视口：默认宽度 + 一个非默认宽度**（如 375px 与 1280px），逐份运行
-  `node hooks/ui-analyzer.mjs <geometry.json> --out docs/specs/<slug>.ui-report.json`（--out 会把多次结果
-  汇总进同一报告文件），**error 清零**才算完成；warning 逐条说明取舍。
-- **LVGL**：运行 `node hooks/lvgl-check.mjs <ui.c> ... --out docs/specs/<slug>.ui-report.json`，**error 清零**。
-- **强制交付物**：实现完成后必须产出 `docs/specs/<slug>.ui-report.json`（双视口/多文件全量 error=0）。
-  Stop 钩子（`hooks/accept-check.js`）会校验该文件存在且全部 error=0，否则无法结束交付。
-- 截图仅作为人工复核的可选附件，不作为判定依据。
+量化验收不再由主会话逐轮驱动，而是通过**单次 code-worker 委派合同**自动闭环。委派 prompt 必须包含以下全部七要素（缺一即合同不完整）：
 
-注意：上述 `hooks/ui-analyzer.mjs`、`hooks/lvgl-check.mjs`、`references/design-rules.md` 均位于
+1. **任务书与规格路径**：委派 prompt 必须引用任务书与规格的 .md 路径（`docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`，满足 Agent 委派门禁）。
+2. **插件脚本路径**（相对描述式，委派时替换为插件实际安装路径）：Web 任务用 `<插件目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<插件目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<插件目录>/hooks/lvgl-check.mjs`（C 源码静态校验）。
+3. **双视口要求**：Web 任务至少采集两个视口——默认宽度 + 一个非默认宽度（如 375px 与 1280px，或项目约定组合）。
+4. **循环指令**："采集 → 分析 → 修复 → 复测，直至全部 error=0"——code-worker 在同一委派内自行迭代，主会话不逐轮参与。
+5. **预算硬限**：最多 5 轮修复、总时长 ≤10 分钟；超限立即停止并如实回报当前违规清单，禁止谎报清零。
+6. **报告落盘**：每次分析都带 `--out docs/specs/<slug>.ui-report.json`（多次/多视口结果汇总进同一报告文件）。
+7. **本地服务自起自停**：需要本地 dev server 时由 code-worker 在闭环内自行启动、结束时关闭，不留后台进程。
+
+**主会话职责（闭环前后各一次，中间不参与）**：
+
+- 委派前：确认 spec frontmatter 已有 `wireframe: approved`（UI 写入门禁已解锁）且 `ui-files` 已声明。
+- 闭环后：code-worker 回报闭环结果时，主会话**只复核 `docs/specs/<slug>.ui-report.json`（error 合计=0）**，不再逐轮参与；warning 逐条说明取舍。
+- **强制交付物不变**：必须产出 `docs/specs/<slug>.ui-report.json`（双视口/多文件全量 error=0）。Stop 钩子（`hooks/accept-check.js`）会校验该文件存在且全部 error=0，否则无法结束交付。截图仅作为人工复核的可选附件，不作为判定依据。
+
+注意：上述 `hooks/ui-collect.js`、`hooks/ui-analyzer.mjs`、`hooks/lvgl-check.mjs`、`references/design-rules.md` 均位于
 dev-sop 插件安装目录（即 SKILL.md 所在插件的 hooks/、references/ 子目录），使用时按插件实际安装路径引用。
 
 ## 第 6 节：阶段 3.5 任务书（spec 批准之后、委派 code-worker 之前）
@@ -170,16 +180,20 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 
 ## 第 8 节：阶段 4.5 独立代码审查（reviewer）
 
-实现与量化验收（第 7 节，含 test-report / ui-report 合规）完成后，进入独立审查阶段。审查者必须是**全新委派的 reviewer 子代理**（插件内置 `agents/reviewer.md`，代理名 `dev-sop:reviewer`：独立上下文 fresh-eyes、只读、开思考、`injectAgentsMd: false` 保持中立），**不得**由主会话自任，更不得由实现该代码的 code-worker 自审代替。
+实现完成后进入审查阶段；审查与量化验收闭环可并行执行（见下方并行指引）。审查者必须是**全新委派的 reviewer 子代理**（插件内置 `agents/reviewer.md`，代理名 `dev-sop:reviewer`：独立上下文 fresh-eyes、只读、开思考、`injectAgentsMd: false` 保持中立），**不得**由主会话自任，更不得由实现该代码的 code-worker 自审代替。
 
-流程（六步，严格顺序）：
+**审查∥量化闭环（v1.3.0 并行提效）**：并行发起前，主会话先**本地 WIP commit 冻结基线**，再在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer`（审查实现**初版** diff，输入=冻结基线对应的**改动清单**）+ `code-worker`（执行第 5 节的量化验收自动闭环），重叠审查与量化验收两段时间。
 
-1. **前置就绪**：code-worker 完成实现并自审通过（第 7 节全部完成，验收测试报告/量化验收报告合规）；
-2. **委派 reviewer**：主会话用 Agent 工具委派 reviewer 子代理，委派 prompt 必须提供：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、**改动文件清单**（区分新增/修改）、**获取 diff 的方式**（git 命令或直接附 diff）、报告输出路径（`docs/specs/<slug>.review-report.json`）——reviewer 按 diff 优先策略审查（见 `agents/reviewer.md` 输入约定）；
-3. **回读报告**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告；
-4. **修复（仅 fail 触发修复循环）**：verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；
-5. **重审（最多 2 轮）**：`fail` 修复后重新委派 reviewer 审查（新报告覆盖旧报告）；最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；
-6. **用户确认**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**，经用户确认后方可定稿——不强制进入修复循环。
+**冻结与增量 diff 语义**：reviewer 委派的 diff 获取方式=`git diff HEAD~1..HEAD`（或主会话指明 range，指向冻结基线提交）；首次提交（无上一提交）时改用 `git diff --no-index /dev/null <改动文件>`（Windows 下用 `NUL` 替代 `/dev/null`）或直接附改动文件清单与内容；量化闭环回报后，增量快检用 `git diff HEAD..工作区`；P0/P1 级才追加**一轮增量快审**（diff 优先，仅审增量改动），**P2** 级问题直接记 backlog，不追加审查轮次。
+
+流程（六步，并行版）：
+
+1. **实现完成**：code-worker 完成实现并自审通过（第 7 节全部完成，验收测试报告 test-report 合规）；量化验收（ui-report）不作为本步前置——它与审查并行，由第 3 步的量化闭环产出，闭环回报后由主会话复核；
+2. **冻结基线**：主会话本地 WIP commit 冻结基线（并行发起的前置动作，见上方冻结与增量 diff 语义）；
+3. **同消息并发委派 reviewer + 量化闭环**：主会话在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer` + `code-worker`（第 5 节量化验收自动闭环）。reviewer 委派 prompt 必须提供：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、**改动文件清单**（区分新增/修改）、**获取 diff 的方式**（`git diff HEAD~1..HEAD`，或主会话指明 range）、报告输出路径（`docs/specs/<slug>.review-report.json`）——reviewer 按 diff 优先策略审查（见 `agents/reviewer.md` 输入约定）；
+4. **增量快检**：量化闭环回报后，主会话用 `git diff HEAD..工作区` 快检闭环修复产生的增量 diff；仅当 reviewer 报告 **P0/P1** 级问题时，才追加**一轮增量快审**（diff 优先，仅审增量改动）；**P2** 级问题直接记 backlog，不追加审查轮次；
+5. **verdict 处置（fail→修复循环 / pass-with-issues→用户确认）**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告——verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；修复后重新委派 reviewer 审查（新报告覆盖旧报告），最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**——不强制进入修复循环；
+6. **定稿**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；`pass-with-issues` 经用户确认（带问题定稿 / 继续修复）后方可定稿。
 
 审查报告结构（`docs/specs/<slug>.review-report.json`）：
 
