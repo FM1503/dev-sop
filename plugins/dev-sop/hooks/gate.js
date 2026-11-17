@@ -312,7 +312,7 @@ function isCodingDelegation(prompt) {
   if (typeof prompt !== 'string' || prompt === '') return false;
   // v1.6.0：先剔除 docs/ 前缀路径子串（docs/ 下文件均为文档/报告，不属编码目标），
   // 减少纯文档委派因提及 docs 内 .js 报告名或清单被误判为编码类；正则兼容中文标点边界。
-  prompt = prompt.replace(/docs\/[^\s，,）)）]*/g, '');
+  prompt = prompt.replace(/(^|[\s，,；;。:：()（）\[【"'])docs[\/\\][^\s，,；;。:：()（）\[】\]"']*/g, '$1');
   return CODE_FILE_EXT_RE.test(prompt);
 }
 

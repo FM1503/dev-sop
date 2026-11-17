@@ -463,3 +463,37 @@ test('v1.6.0 放行链：纯文档委派仅提 docs 内 .js 报告名 + docs/tas
   assert.strictEqual(isAcceptanceDelegation(prompt), false);
   assert.strictEqual(isCodingDelegation(prompt), false); // → gate 放行（非编码类）
 });
+
+// ---- 修复轮（审查后 P1 根治）：边界安全剔除——docs 前须行首或分隔符，防 mydocs 误配 ----
+
+test('修复轮 P1：反斜杠 docs 路径纯文档（docs\\reports\\x.js）→ 不判编码（放行）', () => {
+  assert.strictEqual(
+    isCodingDelegation('汇总 docs\\reports\\x.js 的运行数据到 docs\\tasks\\sum.md'),
+    false
+  );
+  assert.strictEqual(isCodingDelegation('读取 docs\\x.js 说明与 docs\\temp\\check.js 清单'), false);
+});
+
+test('修复轮 P1：mydocs/x.js（docs 前是字母，非行首/分隔符）→ 仍判编码', () => {
+  assert.strictEqual(isCodingDelegation('修改 mydocs/x.js'), true);
+  assert.strictEqual(isCodingDelegation('改动 my_docs/y.js 与 mydocs/z.js'), true);
+});
+
+test('修复轮 P1：docs token 后同一行再跟 src/x.js → 判编码（剔除止于分隔符，不吞后续内容）', () => {
+  assert.strictEqual(isCodingDelegation('见 docs/a.js 并修改 src/x.js'), true);
+});
+
+test('修复轮 P1：docs 路径后紧跟中文句号 → 仅剔至句号（其后内容保留参与判定）', () => {
+  assert.strictEqual(isCodingDelegation('整理 docs/report.js。汇总成文档'), false);
+  assert.strictEqual(isCodingDelegation('见 docs/a.js。另改 src/b.js'), true);
+});
+
+test('修复轮 P1：行首 docs/ 与行首 docs\\ 开头 → 正确剔除（^ 锚生效）', () => {
+  assert.strictEqual(isCodingDelegation('docs/reports/build-stats.js 汇总到文档'), false);
+  assert.strictEqual(isCodingDelegation('docs\\reports\\x.js 仅作参考'), false);
+});
+
+test('修复轮 P1：整串即 docs 路径 → 剔除后空 prompt 边界不崩溃（非编码）', () => {
+  assert.strictEqual(isCodingDelegation('docs/x.js'), false);
+  assert.strictEqual(isCodingDelegation('docs\\x.js'), false);
+});
