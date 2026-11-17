@@ -19,7 +19,7 @@ const AGENT_DENY_REASON =
 const EXEC_PLAN_DENY_REASON =
   '编码委派必须附执行书（docs/tasks/<slug>-exec.md，含精确 old→new 与验证步骤）' +
   '或声明 exec-plan: exempt（仅限非编码任务或用户明确豁免）；勘探由主会话亲自完成（Read/Grep）。' +
-  '验收类委派（输出 review/ui/test-report）自动豁免。';
+  '验收类委派（输出 review/ui/test-report）自动豁免。纯文档/调研类委派可加独立成行的 exec-plan: exempt。';
 
 const UI_DENY_REASON =
   'UI 文件的编写需要规格文档中线框图已获用户批准（spec frontmatter 需含 wireframe: approved）。' +
@@ -310,6 +310,9 @@ const ACCEPTANCE_REPORT_RE =
 
 function isCodingDelegation(prompt) {
   if (typeof prompt !== 'string' || prompt === '') return false;
+  // v1.6.0：先剔除 docs/ 前缀路径子串（docs/ 下文件均为文档/报告，不属编码目标），
+  // 减少纯文档委派因提及 docs 内 .js 报告名或清单被误判为编码类；正则兼容中文标点边界。
+  prompt = prompt.replace(/docs\/[^\s，,）)）]*/g, '');
   return CODE_FILE_EXT_RE.test(prompt);
 }
 

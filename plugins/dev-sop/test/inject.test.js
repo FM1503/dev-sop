@@ -148,11 +148,12 @@ test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+
   assert.ok(item5, '未能截取第 5 条');
   for (const marker of [
     '亲自勘探（Read/Grep）',
-    '执行书 docs/tasks/<slug>-exec.md',
+    '产出执行书内容',
     '文本级精确 old→new',
     '每步验证命令与预期输出',
     'S 级并入变更单改动清单',
-    '委派 prompt 引用执行书路径',
+    'worker 单轮完成落盘执行书+机械应用+验证',
+    '（v1.6.0 单轮三步）',
     'code-worker 只机械应用',
     '不匹配即停报不重试',
     'exec-plan: exempt',

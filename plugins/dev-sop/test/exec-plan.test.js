@@ -25,6 +25,7 @@ const {
   hasExecPlanReference,
   isAcceptanceDelegation,
   referencesDocsPath,
+  EXEC_PLAN_DENY_REASON,
 } = require('../hooks/gate.js');
 
 // ---- isCodingDelegation：正例（≥3）----
@@ -418,4 +419,47 @@ test('gate 矩阵 9 项复跑：Agent 分支全判定链（放行/拦截与拒�
       assert.strictEqual(r.stdout.trim(), '', item.name + '：放行时不产生 deny JSON');
     }
   }
+});
+
+// ---- v1.6.0：isCodingDelegation 先剔除 docs/ 前缀路径子串（文档委派误拦修复）----
+
+test('v1.6.0 docs 剔除：prompt 仅含 docs/x.js 提及（报告/清单名）→ 不判编码（放行）', () => {
+  assert.strictEqual(
+    isCodingDelegation('汇总 docs/reports/build-stats.js 的运行数据到 docs/tasks/sum.md'),
+    false
+  );
+  assert.strictEqual(isCodingDelegation('读取 docs/x.js 说明与 docs/temp/check.js 清单'), false);
+});
+
+test('v1.6.0 docs 剔除：含 src/x.js（非 docs 前缀）→ 仍判编码', () => {
+  assert.strictEqual(isCodingDelegation('按任务书修改 src/x.js'), true);
+});
+
+test('v1.6.0 docs 剔除：docs 提及 + src 混合 → 判编码（剔除只作用于 docs/ 子串）', () => {
+  assert.strictEqual(
+    isCodingDelegation('参考 docs/guide/demo.js 示例，修改 src/app.js 与 src/util.ts'),
+    true
+  );
+});
+
+test('v1.6.0 deny 文案：EXEC_PLAN_DENY_REASON 末尾含新豁免提示句', () => {
+  assert.ok(
+    EXEC_PLAN_DENY_REASON.includes('纯文档/调研类委派可加独立成行的 exec-plan: exempt。'),
+    'deny reason 须含纯文档/调研类豁免提示句'
+  );
+});
+
+test('v1.6.0 docs 剔除：docs/ 中文路径正确剔除（中文文件名 + 中文标点边界）', () => {
+  // 中文文件名整体剔除，不再误判为编码
+  assert.strictEqual(isCodingDelegation('整理 docs/报告/构建统计.js 到汇总文档'), false);
+  // 全角逗号边界：剔除到中文标点为止，其后的 src/app.js 仍判编码
+  assert.strictEqual(isCodingDelegation('见 docs/示例/check.js，另改 src/app.js'), true);
+});
+
+test('v1.6.0 放行链：纯文档委派仅提 docs 内 .js 报告名 + docs/tasks .md 引用 → 全链放行', () => {
+  const prompt = '汇总 docs/reports/build-stats.js 到 docs/tasks/sum.md，纯调研任务';
+  assert.strictEqual(referencesDocsPath(prompt), true);
+  assert.strictEqual(hasExecPlanReference(prompt), false);
+  assert.strictEqual(isAcceptanceDelegation(prompt), false);
+  assert.strictEqual(isCodingDelegation(prompt), false); // → gate 放行（非编码类）
 });
