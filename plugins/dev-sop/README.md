@@ -76,3 +76,9 @@
 - **使用 `/spec` 命令**，或直接提出开发需求（如"帮我做一个 todo 应用"）——inject 钩子会自动注入流程提醒，按七阶段推进即可。
 - **自定义 worker 模型**：将 `agents/code-worker.md` 复制到 `~/.zcode/agents/code-worker.md`，在 frontmatter 中添加 `model: <providerId/modelId>` 行；用户级同名定义优先于插件内置定义。
 - **放行 reviewer 代理**：若用户级工作流规则限制了可委派的子代理类型，需自行放行插件内置的只读审查代理 `dev-sop:reviewer`，否则阶段 4.5 独立审查无法委派。
+
+## 更新日志
+
+每次发版的完整变更见仓库根 [CHANGELOG.md](../../CHANGELOG.md)
+
+License: GPL-3.0

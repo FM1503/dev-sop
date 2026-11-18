@@ -256,6 +256,7 @@ code-worker 侧行为（见 `agents/code-worker.md` 执行书模式）：逐条�
 4. **增量快检**：量化闭环回报后，主会话用 `git diff HEAD`（查看相对冻结基线的全部工作区改动）快检闭环修复产生的增量 diff；仅当 reviewer 报告 **P0/P1** 级问题时，才追加**一轮增量快审**（diff 优先，仅审增量改动）；**P2** 级问题直接记 backlog，不追加审查轮次；
 5. **verdict 处置（fail→修复循环 / pass-with-issues→用户确认）**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告——verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；修复后重新委派 reviewer 审查（新报告覆盖旧报告），最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**——不强制进入修复循环；
 6. **定稿**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；`pass-with-issues` 经用户确认（带问题定稿 / 继续修复）后方可定稿。
+   定稿发布时必须同步：①更新仓库根 CHANGELOG.md（版本/日期/变更摘要/已知问题）②git 提交信息引用版本号 ③打 tag v<版本> 并随 main 推送。
 
 审查报告结构（`docs/specs/<slug>.review-report.json`）：
 
