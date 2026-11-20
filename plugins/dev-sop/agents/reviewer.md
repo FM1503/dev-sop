@@ -28,6 +28,19 @@ injectAgentsMd: false
 
 # 审查策略（diff 优先，按需读）
 
+## 第 0 步：机器预检前置（v1.8.0 修复轮，先跑后审）
+
+当委派 prompt 给出**变更单**路径时，第一步先运行 review-lint 机器预检，把可机械确证的项清零后再进入语义审查：
+
+```bash
+node scripts/review-lint.mjs <变更单.md>
+```
+
+- review-lint 的 `violations`/`warnings`（fileset / linecap / placeholder / verify）属机器可确证项，**审查时直接引用报告条目即可，不在语义四维中重复展开**（避免重复计数）。
+- 机器项清零后，按下方取材策略只做语义维度：四维（符合度 / 缺陷与边界 / 安全与性能 / 测试质量）+ 第五校验点（tier 合规）+ 第六维（执行书符合度）。
+- review-lint 仅读不改文件，符合只读约束；非 git 项目或 diff 不可用时它仅给 `diff-failed` warning 并跳过 fileset/linecap，此时照常继续语义审查。
+- 纯 spec 全量流程（无变更单）或仅给任务书时，可跳过本步。
+
 按输入分四级取材，禁止对清单内文件无差别全文通读：
 
 | 对象 | 策略 |

@@ -89,17 +89,21 @@ function decideInjection(sessionId, latchExists, phaseHint) {
   return { decision: 'inject-reminder', text: REMINDER_TEXT + hint, createLatch: false };
 }
 
-// ---- v1.8.0 computePhaseHint：轻量扫项目 docs → 一行【当前状态】（五态按优先级 first-match） ----
-// 状态机与 scripts/flow-status.mjs 同源压缩为五态：
-//   待批准（draft spec/变更单，或 approved 但 wireframe 声明未批）→ 请呈报批准
-//   待实现（approved 但无实现标记）→ 进入实现
-//   缺 test-report（已实现但缺测试报告；tier: S 免 test-report 不查）→ 补验收测试报告
-//   缺 review-report（缺审查报告；spec review: exempt 不查）→ 委派 reviewer
+// ---- v1.8.0 computePhaseHint：轻量扫项目 docs → 一行【当前状态】（按优先级 first-match） ----
+// 状态判定与 scripts/flow-status.mjs、hooks/accept-check.js 门禁谓词保持一致（终修 P2-6，
+// 有跨一致性测试锁定），七态：
+//   待批准（线框）（wireframe 已声明且未批，draft/approved 皆适用；规则 0）→ 请呈报批准
+//   待批准（draft spec/变更单）→ 请呈报批准
+//   待实现（approved 无实现标记；或终修 P2-6 未实现期：spec 声明 code-files/ui-files
+//     非 none 文件均不存在 → 催报告为时过早，与 accept-check "未实现则不拦" 对齐）→ 进入实现
+//   缺 test-report（已实现但缺测试报告；spec code-files 为 none/缺省不查；change tier S 不查）→ 补验收测试报告
+//   缺 review-report（缺审查报告；spec 仅 review: required 查；change tier S/M 恒查不认 review: exempt）→ 委派 reviewer
+//   缺 ui-report（终修 P2-6 补 ui 态：wireframe approved 且 ui-files 已实现而缺 ui-report）→ 补 UI 量化验收报告
 //   全部合规 → 可定稿
-// 扫描面：docs/specs frontmatter（status/wireframe/review）+ docs/changes frontmatter
-//（status/tier）+ <slug>.test/review-report.json 存在性（specs/ 或 changes/ 任一目录）+
-// 实现标记（报告已存在或 docs/tasks/<slug>.md / <slug>-exec.md）。无 docs 目录 / 无含
-// frontmatter 的条目 → 返回 ''（不加状态行）。
+// 扫描面：docs/specs frontmatter（status/wireframe/review/code-files/ui-files）+ docs/changes
+// frontmatter（status/tier）+ <slug>.test/review/ui-report.json 存在性（specs/ 或 changes/ 任一目录）+
+// 实现标记（报告已存在或 docs/tasks/<slug>.md / <slug>-exec.md）。review:/tier: 值剥首尾引号
+//（终修 P2-5，与 accept-check 一致）。无 docs 目录 / 无含 frontmatter 的条目 → 返回 ''（不加状态行）。
 function parseFmLite(md) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
   if (!m) return null; // 无 frontmatter：轻量判定，宁缺毋滥，不参与状态计算
@@ -119,11 +123,14 @@ function listMdLite(dir) {
   }
 }
 
+// 终修 P2-6：规则 0 拆出"待批准（线框）"、补"缺 ui-report"态（五态 → 七态）
 const PHASE_STATES = [
+  { key: '待批准（线框）', next: '请呈报批准' },
   { key: '待批准', next: '请呈报批准' },
   { key: '待实现', next: '进入实现' },
   { key: '缺 test-report', next: '补验收测试报告' },
   { key: '缺 review-report', next: '委派 reviewer' },
+  { key: '缺 ui-report', next: '补 UI 量化验收报告' },
   { key: '全部合规', next: '可定稿' },
 ];
 
@@ -139,7 +146,38 @@ function computePhaseHint(projectRoot) {
     existsSyncSafe(path.join(specsDir, slug + '.' + kind + '-report.json')) ||
     existsSyncSafe(path.join(changesDir, slug + '.' + kind + '-report.json'));
 
-  const scanDir = (dir) => {
+  // P1-3：requireTest/requireReview 与 scripts/flow-status.mjs、hooks/accept-check.js 逐条对齐：
+  //  spec：仅 code-files 声明且非 none 才要求 test-report；仅 review: required 才要求 review-report。
+  //  change：仅 tier M 要求 test-report（tier S 免）；tier S/M 一律要求 review-report（不认 review: exempt）。
+  const specNeedTest = (codeFilesRaw) => {
+    if (codeFilesRaw == null) return false;
+    const toks = String(codeFilesRaw)
+      .split(',')
+      .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+    if (toks.length === 0) return false;
+    if (toks.length === 1 && toks[0].toLowerCase() === 'none') return false;
+    return true;
+  };
+
+  // 终修 P2-5：review/tier 标量值剥首尾引号（与 accept-check 一致）
+  const stripQuotes = (s) => String(s == null ? '' : s).trim().replace(/^["']|["']$/g, '').trim();
+  // 终修 P2-6（未实现期）：spec 声明的 code-files/ui-files（排除 none 项）文件清单
+  const declaredSpecFiles = (codeRaw, uiRaw) => {
+    const toks = [];
+    for (const raw of [codeRaw, uiRaw]) {
+      if (raw == null) continue;
+      for (const t of String(raw).split(',')) {
+        const v = t.trim().replace(/^["']|["']$/g, '');
+        if (v && v.toLowerCase() !== 'none') toks.push(v);
+      }
+    }
+    return toks;
+  };
+  // ui-files 单字段清单（终修 P2-6 ui 态用；排除 none 项）
+  const uiList = (uiRaw) => declaredSpecFiles(null, uiRaw);
+
+  const scanDir = (dir, source) => {
     for (const name of listMdLite(dir)) {
       let fm;
       try {
@@ -151,32 +189,53 @@ function computePhaseHint(projectRoot) {
       const slug = fm.slug || name.replace(/\.md$/, '');
       const status = String(fm.status || 'draft').toLowerCase();
       const wireframe = fm.wireframe === undefined ? '' : String(fm.wireframe).toLowerCase();
-      const review = String(fm.review || '').toLowerCase();
-      const tier = String(fm.tier || '').toLowerCase();
+      // 终修 P2-5：review/tier 值剥首尾引号（与 accept-check 的 code-files 处理一致）
+      const review = stripQuotes(fm.review).toLowerCase();
+      const tier = stripQuotes(fm.tier).toLowerCase();
       const hasTest = hasReport(slug, 'test');
       const hasReview = hasReport(slug, 'review');
+      const hasUI = hasReport(slug, 'ui');
       const implemented =
         hasTest || hasReview ||
         existsSyncSafe(path.join(projectRoot, 'docs', 'tasks', slug + '.md')) ||
         existsSyncSafe(path.join(projectRoot, 'docs', 'tasks', slug + '-exec.md'));
 
+      // 终修 P2-6（未实现期）：spec 声明的 code-files/ui-files 非 none 文件均不存在 → 待实现
+      const declared = source === 'spec' ? declaredSpecFiles(fm['code-files'], fm['ui-files']) : [];
+      const specNotImplemented =
+        declared.length > 0 &&
+        !declared.some((f) => existsSyncSafe(path.resolve(projectRoot, f)));
+      // 终修 P2-6（ui 态）：wireframe approved 且 ui-files 已实现 → 要求 ui-report
+      const uiFiles = uiList(fm['ui-files']);
+      const uiGate =
+        wireframe === 'approved' &&
+        uiFiles.length > 0 &&
+        uiFiles.some((f) => existsSyncSafe(path.resolve(projectRoot, f)));
+
+      const requireTest = source === 'change' ? tier === 'm' : specNeedTest(fm['code-files']);
+      const requireReview = source === 'change' ? tier === 's' || tier === 'm' : review === 'required';
+
       let key;
-      if (status === 'draft' || (status === 'approved' && wireframe !== '' && wireframe !== 'approved')) {
+      if (wireframe !== '' && wireframe !== 'approved') {
+        key = '待批准（线框）'; // 终修 P2-6 规则 0：draft/approved + wireframe 未批
+      } else if (status === 'draft') {
         key = '待批准';
-      } else if (!implemented) {
+      } else if (!implemented || specNotImplemented) {
         key = '待实现';
-      } else if (!hasTest && tier !== 's') {
+      } else if (requireTest && !hasTest) {
         key = '缺 test-report';
-      } else if (!hasReview && review !== 'exempt') {
+      } else if (requireReview && !hasReview) {
         key = '缺 review-report';
+      } else if (uiGate && !hasUI) {
+        key = '缺 ui-report';
       } else {
         key = '全部合规';
       }
       groups[key].push(slug);
     }
   };
-  scanDir(specsDir);
-  scanDir(changesDir);
+  scanDir(specsDir, 'spec');
+  scanDir(changesDir, 'change');
 
   const total = PHASE_STATES.reduce((n, s) => n + groups[s.key].length, 0);
   if (total === 0) return '';

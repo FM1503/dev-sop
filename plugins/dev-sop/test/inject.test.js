@@ -255,13 +255,38 @@ test('computePhaseHint：draft spec → 一行【当前状态】待批准（含 
 });
 
 test('computePhaseHint：approved 无实现标记 → 待实现；docs/tasks 执行书存在 → 转为缺 test-report', () => {
-  const root = mkProj({ 'docs/specs/api.md': specDoc('api', 'approved', 'review: required') });
+  // P1-3：spec 须声明非 none 的 code-files 才进入"缺 test-report"态（与 accept-check 对齐）
+  const root = mkProj({ 'docs/specs/api.md': specDoc('api', 'approved', 'review: required\ncode-files: src/api.js') });
   assert.ok(computePhaseHint(root).startsWith('【当前状态】待实现：'), computePhaseHint(root));
+  // 终修P2-6：声明的 code-files 须已落盘（否则判入未实现期"待实现"而非催报告），再验证执行书标记态
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'api.js'), '// impl\n', 'utf8');
   fs.mkdirSync(path.join(root, 'docs', 'tasks'), { recursive: true });
   fs.writeFileSync(path.join(root, 'docs', 'tasks', 'api-exec.md'), '# exec\n', 'utf8');
   const hint = computePhaseHint(root);
   assert.ok(hint.startsWith('【当前状态】缺 test-report：'), hint);
   assert.ok(hint.includes('api'), hint);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('终修P2-6 未实现期：spec 声明 code-files 文件均不存在 → 有执行书也显示待实现（不催报告）', () => {
+  const root = mkProj({
+    'docs/specs/gone.md': specDoc('gone', 'approved', 'review: required\ncode-files: src/gone.js'),
+    'docs/tasks/gone-exec.md': '# exec\n',
+  });
+  const hint = computePhaseHint(root);
+  assert.ok(hint.startsWith('【当前状态】待实现：'), hint);
+  assert.ok(hint.includes('gone'), hint);
+  assert.ok(!hint.includes('缺 test-report') && !hint.includes('缺 review-report'), '未实现期不得催报告：' + hint);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('终修P2-6 规则0：approved + wireframe 未批 → 待批准（线框）', () => {
+  const root = mkProj({ 'docs/specs/wf.md': specDoc('wf', 'approved', 'wireframe: pending\nui-files: ui/wf.html') });
+  const hint = computePhaseHint(root);
+  assert.ok(hint.startsWith('【当前状态】待批准（线框）：'), hint);
+  assert.ok(hint.includes('wf'), hint);
+  assert.ok(hint.includes('请呈报批准'), hint);
   fs.rmSync(root, { recursive: true, force: true });
 });
 

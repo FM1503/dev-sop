@@ -821,9 +821,10 @@ async function main() {
         return 0;
       }
     } catch (e) {
+      // P2-7：fail-closed——prospector 判定解析异常时视为"非 prospector"，
+      // 不在此放行（旧实现 return 0 为 fail-open），继续走下方常规委派判定链。
       process.stderr.write('[dev-sop] failed to scan agent subagent_type: ' + (e && e.message) + '\n');
-      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan subagent_type: ' + (e && e.message));
-      return 0;
+      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan subagent_type: ' + (e && e.message) + ' (fail-closed)');
     }
 
     let promptText = '';

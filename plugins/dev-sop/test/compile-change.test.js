@@ -276,3 +276,233 @@ test('--rollback 缺 rollback.json → 失败非零', () => {
   assert.notStrictEqual(rr.status, 0, '缺 rollback.json 应非零');
   assert.match(rr.stderr, /回滚失败/);
 });
+
+// ===== 修复轮1：P1-1 表格 \| 转义 =====
+function tableWith(rowsMd, slug, tier, changed) {
+  return (
+    fm(slug, tier, changed) +
+    '\n## 变更表\n\n| 序号 | 文件 | 行号 | 锚点 | 旧行数 | 新内容 |\n| --- | --- | --- | --- | --- | --- |\n' +
+    rowsMd +
+    '\n\n## 验证\nnode --test && timeout\n'
+  );
+}
+
+test('P1-1 单元格含 a\\|b：字面竖线还原写入（不再截断）', () => {
+  const dir = tmp();
+  seed(dir, { 'p.txt': 'x\ny\n' });
+  writeChange(dir, tableWith('| 1 | p.txt | 1 | x | 1 | a\\|b |\n', 'e1', 'S', 'p.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.compile.status, 0, r.compile.stderr);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'p.txt').toString('utf-8'), 'a|b\ny\n');
+});
+
+test('P1-1 单元格含代码 if (a \\| b)：转义竖线还原为逻辑或竖线', () => {
+  const dir = tmp();
+  seed(dir, { 'c.txt': 'old\nnext\n' });
+  writeChange(dir, tableWith('| 1 | c.txt | 1 | old | 1 | if (a \\| b) return; |\n', 'e2', 'S', 'c.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'c.txt').toString('utf-8'), 'if (a | b) return;\nnext\n');
+});
+
+test('P1-1 转义竖线在首尾：\\|x\\| → |x|', () => {
+  const dir = tmp();
+  seed(dir, { 'f.txt': 'old\n' });
+  writeChange(dir, tableWith('| 1 | f.txt | 1 | old | 1 | \\|x\\| |\n', 'e3', 'S', 'f.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'f.txt').toString('utf-8'), '|x|\n');
+});
+
+test('P1-1 无转义回归：普通单元格列数正确（多列不被破坏）', () => {
+  const dir = tmp();
+  seed(dir, { 'g.txt': 'l1\nl2\n' });
+  writeChange(dir, tableWith('| 1 | g.txt | 1 | l1 | 1 | A1 |\n| 2 | g.txt | 2 | l2 | 1 | A2 |\n', 'e4', 'S', 'g.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'g.txt').toString('utf-8'), 'A1\nA2\n');
+});
+
+// ===== 修复轮1：P1-2 删除语义（空新内容=删除旧行数行）=====
+test('P1-2 删除单行（旧行数 1、新内容空）', () => {
+  const dir = tmp();
+  seed(dir, { 'd1.txt': 'a\nb\nc\n' });
+  writeChange(dir, tableWith('| 1 | d1.txt | 2 | b | 1 |  |\n', 'del1', 'M', 'd1.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.compile.status, 0, r.compile.stderr);
+  assert.match(r.compile.stdout, /== ""/);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'd1.txt').toString('utf-8'), 'a\nc\n');
+});
+
+test('P1-2 删除多行（旧行数 2、新内容空）', () => {
+  const dir = tmp();
+  seed(dir, { 'd2.txt': 'l1\nl2\nl3\nl4\n' });
+  writeChange(dir, tableWith('| 1 | d2.txt | 2 | l2 | 2 |  |\n', 'del2', 'M', 'd2.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'd2.txt').toString('utf-8'), 'l1\nl4\n');
+});
+
+test('P1-2 删除后行数校验 + expect_after 仍适用', () => {
+  const dir = tmp();
+  seed(dir, { 'd3.txt': 'l1\nl2\nl3\nl4\nl5\n' });
+  writeChange(
+    dir,
+    fm('del3', 'M', 'd3.txt') +
+      '\n## 变更表\n\n| 序号 | 文件 | 行号 | 锚点 | 旧行数 | 新内容 |\n| --- | --- | --- | --- | --- | --- |\n' +
+      '| 1 | d3.txt | 2 | l2 | 3 |  |\n\n' +
+      '## expect_after\n\n| 文件 | 包含子串 |\n| --- | --- |\n| d3.txt | l5 |\n\n' +
+      '## 验证\nnode --test && timeout\n'
+  );
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'd3.txt').toString('utf-8'), 'l1\nl5\n', '应删除 3 行，余 2 行');
+});
+
+// ===== 修复轮1：P1-5 --emit-exec 执行书产物 =====
+test('P1-5 编译成功默认产出 docs/tasks/<slug>-exec.md（含脚本/命令/回滚）', () => {
+  const dir = tmp();
+  seed(dir, { 'x.txt': 'a\n' });
+  writeChange(dir, tableWith('| 1 | x.txt | 1 | a | 1 | b |\n', 'ex1', 'S', 'x.txt'));
+  const c = compile(dir);
+  assert.strictEqual(c.status, 0, c.stderr);
+  const execPath = path.join(dir, 'docs', 'tasks', 'ex1-exec.md');
+  assert.ok(fs.existsSync(execPath), '应写出执行书产物');
+  const doc = fs.readFileSync(execPath, 'utf-8');
+  assert.match(doc, /```python/, '执行书应含 Python 代码块');
+  assert.match(doc, /import sys, os, json, base64/, 'Python 代码块应为生成的补丁脚本');
+  assert.match(doc, /compile-change\.mjs ex1|compile-change\.mjs change\.md/, '执行书应含执行命令');
+  assert.match(doc, /回滚/, '执行书应含回滚说明');
+  assert.match(doc, /变更表/, '执行书应含变更表');
+});
+
+test('P1-5 编译失败（无变更表）→ 不写执行书产物', () => {
+  const dir = tmp();
+  seed(dir, { 'x.txt': 'a\n' });
+  writeChange(dir, fm('ex2', 'S', 'x.txt') + '\n# 标题\n没有表格\n\n## 验证\nnode --test\n');
+  const c = compile(dir);
+  assert.notStrictEqual(c.status, 0, '缺变更表应非零退出');
+  assert.ok(!fs.existsSync(path.join(dir, 'docs', 'tasks', 'ex2-exec.md')), '编译失败不得写出执行书');
+});
+
+// ===== 修复轮1：P2-5 混合行尾保真 =====
+test('P2-5 混合行尾文件改 1 行 → 其余行字节级 EOL 不变', () => {
+  const dir = tmp();
+  const orig = Buffer.from('l1\r\nl2\nl3\r\nl4\n', 'utf-8'); // l1 CRLF/l2 LF/l3 CRLF/l4 LF
+  fs.writeFileSync(path.join(dir, 'mx.txt'), orig);
+  writeChange(dir, tableWith('| 1 | mx.txt | 1 | l1 | 1 | L1X |\n', 'mx1', 'M', 'mx.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  const out = readBuf(dir, 'mx.txt');
+  // 仅 l1 改 L1X 且沿用其原 CRLF；l2 LF、l3 CRLF、l4 LF 行尾完全不变
+  assert.ok(out.equals(Buffer.from('L1X\r\nl2\nl3\r\nl4\n', 'utf-8')), '未触碰行行尾应原样保留，实得=' + JSON.stringify(out.toString('utf-8')));
+});
+
+test('P2-5 混合行尾：替换 LF 行产出 LF，不污染相邻 CRLF', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'my.txt'), Buffer.from('l1\r\nl2\nl3\r\n', 'utf-8'));
+  writeChange(dir, tableWith('| 1 | my.txt | 2 | l2 | 1 | NEW |\n', 'my1', 'M', 'my.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  // l2 原为 LF → NEW 用 LF；l1 CRLF/l3 CRLF 不变
+  assert.ok(
+    readBuf(dir, 'my.txt').equals(Buffer.from('l1\r\nNEW\nl3\r\n', 'utf-8')),
+    '被替换行按自身行尾归一，实得=' + JSON.stringify(readBuf(dir, 'my.txt').toString('utf-8'))
+  );
+});
+
+// ===== 修复轮1：P2-8 行号/slug 非法清晰报错 exit 2 =====
+test('P2-8 编辑行行号非正整数（-）→ 清晰报错 exit 2', () => {
+  const dir = tmp();
+  seed(dir, { 'a.txt': 'x\ny\n' });
+  writeChange(dir, tableWith('| 1 | a.txt | - | x | 1 | z |\n', 'badlineno', 'M', 'a.txt'));
+  const c = compile(dir);
+  assert.strictEqual(c.status, 2, '行号非法应 exit 2，实得=' + c.status);
+  assert.match(c.stderr, /行号/);
+});
+
+test('P2-8 frontmatter 缺 slug → 清晰报错 exit 2', () => {
+  const dir = tmp();
+  seed(dir, { 'a.txt': 'x\n' });
+  writeChange(
+    dir,
+    '---\ntier: M\nchanged-files: a.txt\n---\n\n## 变更表\n\n| 序号 | 文件 | 行号 | 锚点 | 旧行数 | 新内容 |\n| --- | --- | --- | --- | --- | --- |\n| 1 | a.txt | 1 | x | 1 | y |\n\n## 验证\nnode --test && timeout\n'
+  );
+  const c = compile(dir);
+  assert.strictEqual(c.status, 2, '缺 slug 应 exit 2，实得=' + c.status);
+  assert.match(c.stderr, /slug/);
+});
+
+// ===== 终修轮（P2×8）=====
+// P2-1 \\| 双转义：连续反斜杠段紧跟 | 时整段视为转义竖线（与 \| 同效），输出字面 |
+test('终修P2-1 双转义 \\\\| 与四反斜杠+竖线：均解析为字面竖线', () => {
+  const dir = tmp();
+  seed(dir, { 'p2.txt': 'x\ny\n' });
+  // 变更单实际内容：第 1 行新内容 a\\|b（两反斜杠+竖线）；第 2 行 c\\\\|d（四反斜杠+竖线）
+  writeChange(
+    dir,
+    tableWith(
+      '| 1 | p2.txt | 1 | x | 1 | a\\\\|b |\n' +
+        '| 2 | p2.txt | 2 | y | 1 | c\\\\\\\\|d |\n',
+      'esc2',
+      'S',
+      'p2.txt'
+    )
+  );
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.compile.status, 0, r.compile.stderr);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'p2.txt').toString('utf-8'), 'a|b\nc|d\n');
+});
+
+// P2-1：反斜杠段后无 | 时整段坍缩为单个字面反斜杠（连续 \\\\ → \）
+test('终修P2-1 连续四反斜杠（后无竖线）输出字面反斜杠', () => {
+  const dir = tmp();
+  seed(dir, { 'bs.txt': 'x\ny\n' });
+  // 变更单实际内容：a\\\\b（四反斜杠） → 解析为 a\b（单字面反斜杠）
+  writeChange(dir, tableWith('| 1 | bs.txt | 1 | x | 1 | a\\\\\\\\b |\n', 'esc4', 'S', 'bs.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.compile.status, 0, r.compile.stderr);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'bs.txt').toString('utf-8'), 'a\\b\ny\n');
+});
+
+// P2-2 Unicode 行界：\f 不得再被当作换行（弃用 splitlines(True)），行号不漂移
+test('终修P2-2 含 \\f 的文件行号不漂移（仅 \\r\\n/\\r/\\n 分行）', () => {
+  const dir = tmp();
+  // 实际字节：'l1<FF>l2\nl3\n' —— splitlines(True) 会把 <FF> 当行界致第 2 行错位
+  seed(dir, { 'ff.txt': 'l1\nl3\n' });
+  fs.writeFileSync(path.join(dir, 'ff.txt'), Buffer.from('l1\x0cl2\nl3\n', 'utf-8'));
+  writeChange(dir, tableWith('| 1 | ff.txt | 2 | l3 | 1 | NEW |\n', 'uni1', 'S', 'ff.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, '按物理行界 l3 应在第 2 行命中，apply 失败: ' + r.apply.stderr);
+  assert.strictEqual(readBuf(dir, 'ff.txt').toString('utf-8'), 'l1\x0cl2\nNEW\n');
+});
+
+// P2-3 文件末行无换行：替换区间含无 EOL 末行 → 新内容同样不补尾 EOL
+test('终修P2-3 替换无尾换行文件的末行 → 结果仍无尾换行', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'nl.txt'), Buffer.from('a\nb\nc', 'utf-8')); // 末行 c 无 EOL
+  writeChange(dir, tableWith('| 1 | nl.txt | 3 | c | 1 | C1 |\n', 'nl1', 'S', 'nl.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.ok(
+    readBuf(dir, 'nl.txt').equals(Buffer.from('a\nb\nC1', 'utf-8')),
+    '应保持无尾换行，实得=' + JSON.stringify(readBuf(dir, 'nl.txt').toString('utf-8'))
+  );
+});
+
+// P2-3：删除末行区间（区间含无 EOL 末行）→ 其余行原样、区间消失
+test('终修P2-3 删除含末行的区间 → 余行字节不变', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'nd.txt'), Buffer.from('p\nq\nr', 'utf-8')); // 末行 r 无 EOL
+  writeChange(dir, tableWith('| 1 | nd.txt | 2 | q | 2 |  |\n', 'nl2', 'S', 'nd.txt'));
+  const r = compileAndApply(dir);
+  assert.strictEqual(r.apply.status, 0, r.apply.stderr);
+  assert.ok(
+    readBuf(dir, 'nd.txt').equals(Buffer.from('p\n', 'utf-8')),
+    '删除 p 之后的 2 行，实得=' + JSON.stringify(readBuf(dir, 'nd.txt').toString('utf-8'))
+  );
+});
