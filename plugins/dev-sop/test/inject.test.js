@@ -27,6 +27,7 @@ const {
   staleLatchFiles,
   cleanStaleLatches,
   CONTEXT_TEXT,
+  computePhaseHint,
 } = require('../hooks/inject.js');
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -219,4 +220,104 @@ test('decideInjection 边界：mtime 恰好 48h 整不属于过期（>48h 才清
   fs.utimesSync(edge, new Date(now - 48 * HOUR_MS), new Date(now - 48 * HOUR_MS));
   assert.strictEqual(staleLatchFiles(dir, now, 48 * HOUR_MS).length, 0);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ---- v1.8.0 动态状态行：computePhaseHint 五态（规格 2.C，状态机与 flow-status 同源） ----
+
+function mkProj(files) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-sop-phase-'));
+  for (const rel of Object.keys(files)) {
+    const full = path.join(root, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, files[rel], 'utf8');
+  }
+  return root;
+}
+
+function specDoc(slug, status, extra) {
+  return '---\nstatus: ' + status + '\nslug: ' + slug + (extra ? '\n' + extra : '') + '\n---\n# ' + slug + '\n';
+}
+
+test('computePhaseHint：无 docs 目录 → 空串（无 docs 不加状态行）', () => {
+  const root = mkProj({ 'README.md': '# no docs\n' });
+  assert.strictEqual(computePhaseHint(root), '');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('computePhaseHint：draft spec → 一行【当前状态】待批准（含 slug，请呈报批准）', () => {
+  const root = mkProj({ 'docs/specs/login.md': specDoc('login', 'draft', 'review: required') });
+  const hint = computePhaseHint(root);
+  assert.ok(hint.startsWith('【当前状态】待批准：'), hint);
+  assert.ok(hint.includes('login'), hint);
+  assert.ok(hint.includes('请呈报批准'), hint);
+  assert.ok(!hint.includes('\n'), '状态行必须一行');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('computePhaseHint：approved 无实现标记 → 待实现；docs/tasks 执行书存在 → 转为缺 test-report', () => {
+  const root = mkProj({ 'docs/specs/api.md': specDoc('api', 'approved', 'review: required') });
+  assert.ok(computePhaseHint(root).startsWith('【当前状态】待实现：'), computePhaseHint(root));
+  fs.mkdirSync(path.join(root, 'docs', 'tasks'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'docs', 'tasks', 'api-exec.md'), '# exec\n', 'utf8');
+  const hint = computePhaseHint(root);
+  assert.ok(hint.startsWith('【当前状态】缺 test-report：'), hint);
+  assert.ok(hint.includes('api'), hint);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('computePhaseHint：test-report 齐缺 review-report → 缺 review-report（委派 reviewer）；review: exempt 不再要求', () => {
+  const root = mkProj({
+    'docs/specs/core.md': specDoc('core', 'approved', 'review: required'),
+    'docs/specs/core.test-report.json': '{"records":[],"summary":{"passed":0,"failed":0}}',
+  });
+  assert.ok(computePhaseHint(root).startsWith('【当前状态】缺 review-report：'), computePhaseHint(root));
+  const exempt = mkProj({
+    'docs/specs/tiny.md': specDoc('tiny', 'approved', 'review: exempt'),
+    'docs/specs/tiny.test-report.json': '{}',
+  });
+  assert.ok(computePhaseHint(exempt).startsWith('【当前状态】全部合规：'), computePhaseHint(exempt));
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(exempt, { recursive: true, force: true });
+});
+
+test('computePhaseHint：五态全齐（test+review 报告）→ 全部合规（可定稿）；S 级变更单免 test-report', () => {
+  const root = mkProj({
+    'docs/specs/feat.md': specDoc('feat', 'approved', 'review: required'),
+    'docs/specs/feat.test-report.json': '{}',
+    'docs/specs/feat.review-report.json': '{}',
+  });
+  assert.ok(computePhaseHint(root).startsWith('【当前状态】全部合规：'), computePhaseHint(root));
+  assert.ok(computePhaseHint(root).includes('可定稿'), computePhaseHint(root));
+  const sLevel = mkProj({
+    'docs/changes/fix-typo.md': '---\nslug: fix-typo\nstatus: approved\ntier: S\n---\n# fix\n',
+    'docs/tasks/fix-typo-exec.md': '# exec\n',
+  });
+  assert.ok(computePhaseHint(sLevel).startsWith('【当前状态】缺 review-report：'), computePhaseHint(sLevel));
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(sLevel, { recursive: true, force: true });
+});
+
+test('computePhaseHint：优先级 first-match（draft 压在合规之上，一行只报最高优先级态）', () => {
+  const root = mkProj({
+    'docs/specs/ok.md': specDoc('ok', 'approved', 'review: required'),
+    'docs/specs/ok.test-report.json': '{}',
+    'docs/specs/ok.review-report.json': '{}',
+    'docs/specs/wip.md': specDoc('wip', 'draft', ''),
+  });
+  const hint = computePhaseHint(root);
+  assert.ok(hint.startsWith('【当前状态】待批准：wip'), hint);
+  assert.ok(!hint.includes('ok'), '合规 slug 不应出现在待批准行：' + hint);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('decideInjection 追加位：状态行同时追加到首轮全文与一行提醒末尾；空 hint 旧文案逐字符不变（闩锁回归）', () => {
+  const hint = '【当前状态】待批准：foo（请呈报批准）';
+  const full = decideInjection('t1', false, hint);
+  assert.ok(full.text.endsWith('\n' + hint), '首轮全文末尾未追加状态行');
+  const rem = decideInjection('t1', true, hint);
+  assert.ok(rem.text.endsWith('\n' + hint), '一行提醒末尾未追加状态行');
+  // 空 hint：与 v1.7 文案逐字符一致（无 docs 不加）
+  assert.strictEqual(decideInjection('t1', false, '').text, CONTEXT_TEXT + LATCH_NOTICE);
+  assert.strictEqual(decideInjection('t1', true, '').text, REMINDER_TEXT);
+  assert.strictEqual(decideInjection('t1', false).text, CONTEXT_TEXT + LATCH_NOTICE);
 });

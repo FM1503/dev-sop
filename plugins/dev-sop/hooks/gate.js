@@ -337,6 +337,35 @@ function isAcceptanceDelegation(prompt) {
   return ACCEPTANCE_REPORT_RE.test(prompt);
 }
 
+// ---- v1.8.0 prospector 只读勘探放行（规格 2.E，双条件防伪装）----
+// getSubagentType：从 tool_input.subagent_type（或 tool.input.subagent_type）取委派代理类型名。
+// isProspectorDelegation：双条件同时满足才判定——①类型名含 'prospector'；②prompt 首行
+//（trim 后）精确等于 'PROSPECTOR-READONLY'。只满足其一（仅类型名伪装/仅标记无类型）均不放行，
+// 回退常规委派判定链。只读勘探代理无写入风险，放行后由 gate 记日志 reason=prospector-readonly。
+function getSubagentType(payload) {
+  const inputs = [];
+  if (payload && typeof payload.tool_input === 'object' && payload.tool_input) {
+    inputs.push(payload.tool_input);
+  }
+  if (payload && payload.tool && typeof payload.tool === 'object' && payload.tool.input) {
+    inputs.push(payload.tool.input);
+  }
+  for (const input of inputs) {
+    if (typeof input.subagent_type === 'string' && input.subagent_type !== '') return input.subagent_type;
+  }
+  return '';
+}
+
+function isProspectorDelegation(payload) {
+  const sub = getSubagentType(payload);
+  if (!sub.includes('prospector')) return false;
+  const firstLine = String(getAgentPrompt(payload) || '')
+    .trim()
+    .split(/\r?\n/, 1)[0]
+    .trim();
+  return firstLine === 'PROSPECTOR-READONLY';
+}
+
 // ---- v1.7.0 Bash 写模式检测（补丁直改配套，堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
 // parseBashWriteTargets：解析命令中的显式文件写入模式，返回目标路径数组（去重保序）。
 // 目标无法确定（$(...) 替换、heredoc 喂程序、patch 读 stdin 等）时返回 'opaque' 标记项；
@@ -781,6 +810,22 @@ async function main() {
       return 0;
     }
 
+    // ---- v1.8.0 prospector 只读勘探放行（规格 2.E，双条件，置于一切委派门禁之前）----
+    // 只读勘探代理不写文件、无写入风险：subagent_type 含 'prospector' 且 prompt 首行
+    //（trim）精确等于 'PROSPECTOR-READONLY' → 直接放行并记日志 reason=prospector-readonly。
+    // 仅类型名（伪装为 prospector 但无标记）或仅标记（普通 worker 首行写标记）均不放行，
+    // 继续走常规 docs/执行书判定链（双条件防伪装）。
+    try {
+      if (isProspectorDelegation(payload)) {
+        appendLog('PreToolUse', toolName, '(agent)', 'allow', 'prospector-readonly');
+        return 0;
+      }
+    } catch (e) {
+      process.stderr.write('[dev-sop] failed to scan agent subagent_type: ' + (e && e.message) + '\n');
+      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan subagent_type: ' + (e && e.message));
+      return 0;
+    }
+
     let promptText = '';
     try {
       promptText = getAgentPrompt(payload);
@@ -1056,6 +1101,7 @@ module.exports = {
   isCodingDelegation,
   hasExecPlanReference,
   isAcceptanceDelegation,
+  isProspectorDelegation,
   EXEC_PLAN_DENY_REASON,
   parseBashWriteTargets,
   BASH_WRITE_OPAQUE,

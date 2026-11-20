@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.8.0] - 2026-11-20
+
+### 新增
+
+- 变更单编译器 `scripts/compile-change.mjs`：表格驱动变更单（行号/锚点/旧行数/新内容 + `<NEWFILE>`/`<NL>`/expect_after/验证字段）→ 一键管道生成并执行确定性补丁；**锚点零转录**（old 不再逐字符抄写，行号+锚点子串断言防漂移）；**自动回滚**（执行前快照 `docs/changes/<slug>.rollback.json`，`--rollback` 一键还原）；执行书 `docs/tasks/<slug>-exec.md` 改为编译产物，编译失败 fallback `patch-mode: edit`
+- 机器预检 `scripts/review-lint.mjs`：文件集⊆changed-files / 净变更行数 tier 上限（S:30，M:120，L 不查）/ TODO-FIXME-XXX 占位 / 验证命令断言与 timeout 四类检查，JSON 违规清单 + exit code；reviewer 阶段先跑 lint，机器项清零后仅语义四维
+- 断点续作 `scripts/flow-status.mjs`：扫描 specs/changes/reports，输出每个活跃 slug 的阶段/已有产物/缺失产物/下一步一行表
+- 动态状态注入（`hooks/inject.js`）：`computePhaseHint` 轻量扫项目 docs，按优先级在首轮全文与一行提醒末尾追加一行【当前状态】（待批准/待实现/缺 test-report/缺 review-report/全部合规，含 slug），无 docs 不加
+- prospector 只读勘探代理（`agents/prospector.md` + `hooks/gate.js`）：并行读目标文件仅返回锚点表（文件/行号区间/关键行摘录/建议 old 定位点），不做方案不评价；gate 双条件放行（类型名含 prospector 且 prompt 首行 `PROSPECTOR-READONLY`，防伪装）
+
 ## [1.7.1] - 2026-11-20
 
 ### 新增

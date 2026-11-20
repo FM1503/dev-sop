@@ -25,7 +25,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ### 阶段 0：触发判断与分级路由（v1.4.0）
 
-收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。
+收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。**断点续作**：随时 `node scripts/flow-status.mjs` 查各 slug 的阶段/已有产物/缺失产物/下一步（inject 注入的【当前状态】行与它同一状态机）。
 
 ### 阶段 1：需求澄清访谈（调研与访谈并行）
 
@@ -49,7 +49,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ### 阶段 3.6：执行书（v1.5.0，委派编码前必做）
 
-主会话勘探后产出（模板 `references/spec-templates/exec-plan.md`），委派必附：主会话亲自 Read/Grep 勘探目标文件现状 → 产出 `docs/tasks/<slug>-exec.md`（文本级精确 old→new 改动清单 + 每步验证命令与预期输出；S 级并入变更单改动清单，委派 prompt 引用变更单路径即可）→ 并入委派 prompt；编码类委派缺执行书引用会被 gate 拦截；非编码任务或用户明确豁免时标 `exec-plan: exempt`。细则：stages-detail.md 第 6.5 节。
+主会话勘探后只填**变更表**（change-lite 表格驱动：行号/锚点/旧行数/新内容 + `<NEWFILE>`/`<NL>`/expect_after/验证字段），执行书不再手写——委派 code-worker 单轮：落盘变更单 → `node scripts/compile-change.mjs <变更单> | python -` → 验证命令（执行书=编译产物 `docs/tasks/<slug>-exec.md`，锚点零转录+自动回滚；编译失败 fallback `patch-mode: edit`）；勘探可先委派 prospector 并行取锚点表，主会话基于表填变更表并裁决；编码类委派缺变更单/执行书引用会被 gate 拦截；非编码任务或用户明确豁免时标 `exec-plan: exempt`。细则：stages-detail.md 第 6.5 节。
 
 ### 阶段 4：TDD 实现 + 自审（量化验收自动闭环，≤5轮/10min）
 
@@ -65,7 +65,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ## 执行代理
 
-内置 `dev-sop:code-worker`（`agents/code-worker.md`）：禁用思考、只执行不决策、默认继承会话模型；如需专属模型，复制到 `~/.zcode/agents/code-worker.md` 并在 frontmatter 加 `model: <providerId/modelId>` 行，用户级同名定义优先。详见 stages-detail.md 第 9 节。
+内置 `dev-sop:code-worker`（`agents/code-worker.md`）：禁用思考、只执行不决策、默认继承会话模型；如需专属模型，复制到 `~/.zcode/agents/code-worker.md` 并在 frontmatter 加 `model: <providerId/modelId>` 行，用户级同名定义优先。另内置 `dev-sop:prospector`（`agents/prospector.md`）：只读勘探代理，仅 Read/Grep/Glob 类操作、只返回锚点表（文件/行号区间/关键行摘录/建议 old 定位点），不做方案不评价；委派需双条件（类型名含 prospector 且 prompt 首行 `PROSPECTOR-READONLY`）方可过 gate 放行。详见 stages-detail.md 第 6.5 / 9 节。
 
 ## 硬规则
 

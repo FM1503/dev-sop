@@ -47,7 +47,7 @@
 1. **判据自评**（主会话）：对照 1.1 路由表逐条核对（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、无 UI/LVGL 文件）。
 2. **AskUserQuestion 单问**：改动方案一句话 + 影响面 + 选项（批准 / 拒绝 / 改走全流程）。
 3. **拟变更单**：按 `references/spec-templates/change-lite.md` 骨架拟出变更单全文（目标路径 `docs/changes/<slug>.md`，该路径在白名单内），frontmatter 含 slug / `status: approved`（事前单问已批）/ date / `tier: S` / `changed-files: <逗号清单>`；正文结构（v1.5.1 统一）：**改动清单表（文本级精确 old→new，同 exec-plan 模板）** + 影响面/回滚各一行（四行骨架：改什么/为什么/影响面/回滚方式，其中改动清单表为必含项）——变更单内容随第 4 步委派 prompt 逐字带出，不再单独委派落盘。
-4. **委派 code-worker（单轮三步，v1.6.0）**：prompt 引用变更单路径并逐字附变更单全文（满足 Agent 委派门禁与 v1.5.0 执行书门禁——变更单正文须含"改动清单"表，同样**文本级精确 old→new**（勘探由主会话亲自 Read/Grep 完成，见第 6.5 节），S 级不再另建独立执行书），worker 同一轮完成 ①落盘变更单 ②机械应用改动清单 ③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮，停报纪律不变），**免任务书**。改动应用默认**补丁直改（v1.7.0）**：主会话勘探后生成补丁脚本嵌入变更单（"## 补丁脚本"+"## 执行命令"两节），worker 仅执行执行命令；`patch-mode: edit` 备选（定位行号+最短唯一锚点+定向 Read 禁全文件读入）。
+4. **委派 code-worker（单轮三步，v1.8.0 编译直改）**：prompt 引用变更单路径并逐字附变更单全文（满足 Agent 委派门禁与执行书门禁——变更单正文须含**变更表**（change-lite 表格驱动：序号/文件/行号/锚点/旧行数/新内容 + `<NEWFILE>`/`<NL>` 约定 + expect_after + 验证字段，见第 6.5 节；勘探可先委派 prospector 并行取锚点表，主会话基于表填变更表并裁决），S 级不再另建独立执行书），worker 同一轮完成 ①落盘变更单 ②`node scripts/compile-change.mjs docs/changes/<slug>.md | python -`（执行书=编译产物 docs/tasks/<slug>-exec.md，一条管道机械应用、锚点零转录）③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮，停报纪律不变），**免任务书**；**编译失败 fallback `patch-mode: edit`**（定位行号+最短唯一锚点+定向 Read 禁全文件读入）。
 5. **修完跑受影响测试**（若有）：只跑受影响测试，测试纪律（单命令≤2 分钟等）沿用。
 6. **reviewer diff 快审**：输入含变更单；**新增校验维度：tier 合规——超 S 判据即 P1"要求升级流程"**（四维审查照常）。S 级快审不复跑测试：采信执行回报的测试输出摘要，审查限于静态 diff、清单符合度、tier 合规、断言强度抽查（读测试代码不复跑）；M/L 不变。**冒烟∥快审（v1.6.0）**：快审与主会话只读冒烟同时间片并行发起，结果合并呈报。
 7. **报告**：`docs/changes/<slug>.review-report.json`（结构同第 8 节；测试结果记入 summary.checked；不复用 docs/specs/ 路径）。verdict 判定规则与修复循环（fail 修复重审最多 2 轮）同第 8 节。
@@ -61,7 +61,7 @@
 
 1. **1 批澄清（≤3 问）**：AskUserQuestion 一次批次覆盖目标行为、影响面、验收要点。
 2. **变更单加长版 + 单问批准**：复制 `change-lite.md` 骨架到 `docs/changes/<slug>.md`，可加长至 15 行（改动清单表行数不计入），须含**验收标准 3-5 条清单**（`- [ ]` 形式）；frontmatter `tier: M` / `status: approved`（单问批准后写入）。
-3. **实现 + 受影响测试（单轮三步，v1.6.0）**：委派 code-worker（prompt 引用变更单/执行书路径并逐字附其内容，worker 同一轮完成 ①落盘变更单/执行书 ②机械应用改动清单 ③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮，停报纪律不变）；改动应用默认**补丁直改（v1.7.0）**：主会话勘探后生成补丁脚本嵌入变更单/执行书（"## 补丁脚本"+"## 执行命令"两节），worker 仅执行执行命令；`patch-mode: edit` 备选（定位行号+最短唯一锚点+定向 Read 禁全文件读入）；M 级实现委派同样满足 v1.5.0 执行书门禁——变更单须含"改动清单"表（**文本级精确 old→new**，同 exec-plan 模板，勘探由主会话亲自完成，见第 6.5 节），或另附执行书 `docs/tasks/<slug>-exec.md`）；修完跑受影响测试并产出**单条 test-report**：`docs/changes/<slug>.test-report.json`（结构同第 7 节：records≥1、每条 result=pass、summary.failed=0）。
+3. **实现 + 受影响测试（单轮三步，v1.8.0 编译直改）**：委派 code-worker（prompt 引用变更单路径并逐字附变更表全文——变更表用 change-lite 模板（序号/文件/行号/锚点/旧行数/新内容 + `<NEWFILE>`/`<NL>` 约定 + expect_after + 验证字段，见第 6.5 节；勘探可先委派 prospector 并行取锚点表），worker 同一轮完成 ①落盘变更单 ②`node scripts/compile-change.mjs docs/changes/<slug>.md | python -`（执行书=编译产物 docs/tasks/<slug>-exec.md）③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮，停报纪律不变）；**编译失败 fallback `patch-mode: edit`**（定位行号+最短唯一锚点+定向 Read 禁全文件读入）；M 级实现委派同样满足执行书门禁——变更单含变更表即可，或另附编译产物执行书 `docs/tasks/<slug>-exec.md`）；修完跑受影响测试并产出**单条 test-report**：`docs/changes/<slug>.test-report.json`（结构同第 7 节：records≥1、每条 result=pass、summary.failed=0）。
 4. **reviewer 快审 + 呈报**：同 0S 第 6-8 步（tier 合规校验按 M 判据：单项目内功能调整；**冒烟∥快审（v1.6.0）**：快审与主会话只读冒烟同时间片并行发起，结果合并呈报）；报告 `docs/changes/<slug>.review-report.json`。
 
 门禁联动：M 级交付时 `hooks/accept-check.js` 同时校验 review-report（verdict 合规）与 test-report（单条全 pass）。S/M 修复循环与并行约束沿用 L 级（第 8 节）。
@@ -202,9 +202,9 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 
 **worker 零思考纯执行**：勘探与方案设计全部上移主会话，code-worker 只逐条机械应用。主会话勘探后将执行书内容写入委派 prompt（与任务书同 slug，S 级并入变更单的"改动清单"表，不再独立成文件；执行书落盘动作归步骤 3 单轮三步）：
 
-1. **主会话亲自勘探**：用 Read / Grep 亲自查看目标文件现状（不委派、不凭记忆），复制准确的现有文本片段作为 old 锚点。
-2. **按模板产出**：按 `references/spec-templates/exec-plan.md` 骨架在委派 prompt 中填两张表——"改动清单"（序号 / 文件 / 定位 old 精确片段（新文件标 NEW）/ 改为 new 文本或全文）与"执行顺序与验证"（步骤 / 动作（应用序号 N / 运行命令）/ 预期输出（精确））；frontmatter：slug（同任务书）/ date / files-touched。
-3. **并入委派（单轮三步，v1.6.0）**：执行书/变更单内容直接写入委派 prompt 并写明将落盘的执行书路径（该路径引用同时满足 Agent 委派门禁的执行书要求），code-worker 同一轮完成 ①落盘执行书/变更单（逐字写入）②机械应用改动清单 ③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮）；改动应用默认**补丁直改（v1.7.0）**：主会话勘探后生成补丁脚本嵌入执行书（"## 补丁脚本"+"## 执行命令"两节），worker 仅执行执行命令；`patch-mode: edit` 备选（定位行号+最短唯一锚点+定向 Read 禁全文件读入）；S 级改为把同样的"改动清单"表直接写入变更单并随 prompt 附变更单路径。
+1. **主会话亲自勘探（或 prospector 并行代勘）**：用 Read / Grep 亲自查看目标文件现状（不凭记忆），复制准确的现有文本片段作为 old 锚点；可先委派 prospector（类型名含 prospector，委派 prompt 首行 `PROSPECTOR-READONLY`，gate 双条件放行）并行取锚点表（见 `agents/prospector.md`），主会话基于表填变更表并裁决——裁决与 old 转录始终在主会话。
+2. **产出变更表（v1.8.0 表格驱动，手写执行书退役）**：按 `references/spec-templates/change-lite.md` 的"变更表"填表——列：序号 / 文件 / 行号（旧块首行，1 基）/ 锚点（该行应含短子串）/ 旧行数 / 新内容（多行 `<NL>` 转义，新文件 `<NEWFILE>` 前缀全文），另含 `## expect_after`（文件 / 包含子串）与 `## 验证` 字段；执行书不再手写——`docs/tasks/<slug>-exec.md` 为 `node scripts/compile-change.mjs <变更单>` 的编译产物（补丁脚本 / 执行命令 / 自动回滚快照生成，锚点零转录）。
+3. **并入委派（单轮三步，v1.8.0 编译直改）**：变更表全文写入委派 prompt 并写明变更单落盘路径（`docs/changes/<slug>.md` 引用同时满足 Agent 委派门禁与执行书门禁），code-worker 同一轮完成 ①落盘变更单（逐字写入）②`node scripts/compile-change.mjs docs/changes/<slug>.md | python -`（执行书=编译产物 docs/tasks/<slug>-exec.md，一条管道机械应用）③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮）；**编译失败（exit 非零）fallback `patch-mode: edit`**（定位行号+最短唯一锚点+定向 Read 禁全文件读入）；S 级同样把变更表直接写入变更单并随 prompt 附变更单路径。
 
 **文本级精确约束（硬性）**：
 
@@ -218,7 +218,7 @@ code-worker 侧行为（见 `agents/code-worker.md` 执行书模式）：逐条�
 
 - PATCHES 列表天然批量：大改动 = 一份执行书一个脚本逐条集合（可含跨文件、重复出现 count、new_file 全文写），20 文件与 2 文件 worker 耗时几乎相同——**禁止把大改动拆成多次委派**（每次委派 ~10s 启动开销）
 - 多段串联验证：改动有依赖时执行命令写 `python - <<'PYEOF'(补丁段1) && <验证1> && python - <<'PYEOF'(补丁段2) && <验证2>`，失败停在出错段即天然检查点
-- 勘探并行化：主会话勘探多文件时在同一消息并行发起多个 Read/Grep（大改动的主要耗时在勘探）
+- 勘探并行化：主会话勘探多文件时在同一消息并行发起多个 Read/Grep（大改动的主要耗时在勘探）；v1.8.0 起可先委派 prospector（类型名含 prospector，prompt 首行 `PROSPECTOR-READONLY`）并行取锚点表，主会话基于表填变更表并裁决
 
 ## 第 7 节：阶段 4 TDD 实现 + 自审
 
@@ -258,7 +258,7 @@ code-worker 侧行为（见 `agents/code-worker.md` 执行书模式）：逐条�
 
 1. **实现完成**：code-worker 完成实现并自审通过（第 7 节全部完成，验收测试报告 test-report 合规）；量化验收（ui-report）不作为本步前置——它与审查并行，由第 3 步的量化闭环产出，闭环回报后由主会话复核；
 2. **冻结基线**：主会话本地 WIP commit 冻结基线（并行发起的前置动作，见上方冻结与增量 diff 语义）；
-3. **同消息并发委派 reviewer + 量化闭环**：主会话在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer` + `code-worker`（第 5 节量化验收自动闭环）。reviewer 委派 prompt 必须提供：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、**改动文件清单**（区分新增/修改）、**获取 diff 的方式**（`git diff HEAD~1..HEAD`，或主会话指明 range）、报告输出路径（`docs/specs/<slug>.review-report.json`）——reviewer 按 diff 优先策略审查（见 `agents/reviewer.md` 输入约定）；该委派属**验收类委派**（输出 review-report），gate 自动豁免执行书要求（v1.5.1），改动文件清单含代码文件也不会被拦；收到执行回报后，快审与主会话只读冒烟同时间片并行发起，结果合并呈报（冒烟∥快审，v1.6.0）；
+3. **同消息并发委派 reviewer + 量化闭环**：主会话在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer` + `code-worker`（第 5 节量化验收自动闭环）。reviewer 委派 prompt 必须提供：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、**改动文件清单**（区分新增/修改）、**获取 diff 的方式**（`git diff HEAD~1..HEAD`，或主会话指明 range）、报告输出路径（`docs/specs/<slug>.review-report.json`）——reviewer 按 diff 优先策略审查（见 `agents/reviewer.md` 输入约定）；**v1.8.0 机器预检前置**：审查先跑 `node scripts/review-lint.mjs <变更单> [--diff-cmd "git diff"]`（文件集⊆changed-files / 净变更行数 tier 上限 / TODO-FIXME-XXX 占位 / 验证命令断言与 timeout 四类机器项），机器项清零后仅做语义四维（符合度/缺陷/安全性能/测试）；lint 违规清单原样并入审查输入，不得带机器违规出 verdict；该委派属**验收类委派**（输出 review-report），gate 自动豁免执行书要求（v1.5.1），改动文件清单含代码文件也不会被拦；收到执行回报后，快审与主会话只读冒烟同时间片并行发起，结果合并呈报（冒烟∥快审，v1.6.0）；
 4. **增量快检**：量化闭环回报后，主会话用 `git diff HEAD`（查看相对冻结基线的全部工作区改动）快检闭环修复产生的增量 diff；仅当 reviewer 报告 **P0/P1** 级问题时，才追加**一轮增量快审**（diff 优先，仅审增量改动）；**P2** 级问题直接记 backlog，不追加审查轮次；
 5. **verdict 处置（fail→修复循环 / pass-with-issues→用户确认）**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告——verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；修复后重新委派 reviewer 审查（新报告覆盖旧报告），最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**——不强制进入修复循环；
 6. **定稿**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；`pass-with-issues` 经用户确认（带问题定稿 / 继续修复）后方可定稿。

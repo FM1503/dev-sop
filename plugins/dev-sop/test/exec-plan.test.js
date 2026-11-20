@@ -497,3 +497,77 @@ test('修复轮 P1：整串即 docs 路径 → 剔除后空 prompt 边界不崩�
   assert.strictEqual(isCodingDelegation('docs/x.js'), false);
   assert.strictEqual(isCodingDelegation('docs\\x.js'), false);
 });
+
+// ---- v1.8.0：prospector 只读勘探放行（gate Agent 分支双条件，规格 2.E）----
+
+const { isProspectorDelegation } = require('../hooks/gate.js');
+
+function prospectorPayload(subagentType, prompt) {
+  return { tool_name: 'Agent', tool_input: { subagent_type: subagentType, prompt: prompt } };
+}
+
+// e2e：带 subagent_type 的真实 gate.js 调用（spawn 喂 stdin JSON）
+function runGateAgent(subagentType, prompt) {
+  return spawnSync(process.execPath, [GATE_JS], {
+    input: JSON.stringify(prospectorPayload(subagentType, prompt)),
+    cwd: PLUGIN_DIR,
+    env: Object.assign({}, process.env, { ZCODE_PROJECT_DIR: PLUGIN_DIR }),
+    timeout: 20000,
+    encoding: 'utf8',
+  });
+}
+
+test('prospector 双条件：类型名含 prospector + prompt 首行精确 PROSPECTOR-READONLY → 判定放行（纯函数）', () => {
+  assert.strictEqual(
+    isProspectorDelegation(prospectorPayload('dev-sop:prospector', 'PROSPECTOR-READONLY\n勘探 src/a.js 定位 foo 函数')),
+    true
+  );
+  // 首行前后空白宽容（trim 后精确）
+  assert.strictEqual(
+    isProspectorDelegation(prospectorPayload('prospector', '  PROSPECTOR-READONLY  \n目标文件清单见下')),
+    true
+  );
+  // 首行带多余文字 → 非精确等于，不放行
+  assert.strictEqual(
+    isProspectorDelegation(prospectorPayload('dev-sop:prospector', 'PROSPECTOR-READONLY 但本次附带修改建议')),
+    false
+  );
+});
+
+test('prospector 双条件 e2e：放行置于 docs 门禁之前（无 docs 路径 + 提及 .js 仍 exit 0，无 deny 输出）', () => {
+  const r = runGateAgent('dev-sop:prospector', 'PROSPECTOR-READONLY\n并行勘探 src/a.js 与 hooks/gate.js，返回锚点表');
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
+});
+
+test('prospector 伪装 1：仅类型名（prompt 首行无标记）→ 不放行，回退常规链（无 docs 引用 → exit 2 AGENT_DENY）', () => {
+  assert.strictEqual(
+    isProspectorDelegation(prospectorPayload('dev-sop:prospector', '顺便把 src/app.js 改了')),
+    false
+  );
+  const r = runGateAgent('dev-sop:prospector', '勘探 src/a.js 并直接修改 hooks/gate.js');
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes('委派任务前请先走 /spec 流程'));
+});
+
+test('prospector 伪装 2：仅标记（普通类型名 + 首行 PROSPECTOR-READONLY）→ 不放行（无 docs 引用 → exit 2）', () => {
+  assert.strictEqual(
+    isProspectorDelegation(prospectorPayload('dev-sop:code-worker', 'PROSPECTOR-READONLY\n勘探 src/a.js')),
+    false
+  );
+  assert.strictEqual(isProspectorDelegation(prospectorPayload('', 'PROSPECTOR-READONLY\n勘探')), false);
+  const r = runGateAgent('general-purpose', 'PROSPECTOR-READONLY\n勘探 src/a.js 返回锚点表');
+  assert.strictEqual(r.status, 2);
+});
+
+test('prospector 不影响普通委派：code-worker 附执行书引用 → 照旧放行；编码缺执行书 → 照旧 deny', () => {
+  const ok = runGateAgent('dev-sop:code-worker', '按 docs/tasks/todo.md 与执行书 docs/tasks/todo-exec.md 修改 src/app.js');
+  assert.strictEqual(ok.status, 0);
+  assert.strictEqual(ok.stdout.trim(), '');
+  const bad = runGateAgent('dev-sop:code-worker', '按 docs/tasks/todo.md 任务书修改 src/app.js');
+  assert.strictEqual(bad.status, 2);
+  const out = JSON.parse(bad.stdout.trim());
+  assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes('编码委派必须附执行书'));
+});

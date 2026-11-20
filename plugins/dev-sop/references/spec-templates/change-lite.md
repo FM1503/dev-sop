@@ -11,73 +11,53 @@ changed-files: <目标代码文件，逗号分隔的项目相对路径>
 - 改什么：<一句话：目标文件与改动点>
 - 为什么：<一句话：动机 / 触发原因>
 - 影响面：<一句话：受影响行为与范围>
-- 回滚方式：<一句话：如何还原（如 git revert / 还原常量值）>
+- 回滚方式：编译自动快照 `docs/changes/<slug>.rollback.json`；一键还原 `node scripts/compile-change.mjs docs/changes/<slug>.md --rollback | python -`
 
-## 改动清单（文本级 old→new，同 exec-plan 模板，v1.5.1 起必含）
+## 变更表
 
-| 序号 | 文件 | 定位行号（Edit 备选用） | 定位（old 文本精确片段，新文件标 NEW） | 改为（new 文本或全文） |
-| --- | --- | --- | --- | --- |
-| 1 | <项目相对路径> | <如 L12-L15；新文件写 NEW> | <old：与当前文件内容逐字符一致的精确片段；须在文件内唯一> | <new：完整替换文本> |
+> v1.8.0 表格驱动（与 `scripts/compile-change.mjs` 解析格式严格对齐）。编译器据此生成
+> 补丁脚本与执行书 `docs/tasks/<slug>-exec.md`（编译产物，不再手写）：行号+锚点断言、
+> 旧行数校验、EOL 字节保真、新文件全文写入、expect_after 后置断言、执行前自动快照回滚，
+> 失败 exit 1 打印 ±3 行上下文。**old 零转录**——只需给行号与锚点子串，不必抄原文。
 
-## 补丁脚本
+| 序号 | 文件 | 行号 | 锚点 | 旧行数 | 新内容 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | <项目相对路径> | <旧块首行行号，1 基，如 12> | <该行应含的短子串（唯一判别）> | <被替换的行数> | <替换文本；多行用 <NL> 转义> |
+| 2 | <新文件路径> | - | - | - | <NEWFILE><新文件全文；多行同样用 <NL> 转义> |
 
-默认路径（v1.7.0 补丁直改）：主会话勘探后把逐条 old→new 生成确定性补丁脚本（Python 标准库，无第三方依赖）全文嵌入本节——PATCHES 逐条 `{file, old, new, count, expect_after}`（count 声明出现次数，默认 1；expect_after 仅新文件分支用：写后断言文件存在且含该文本），前置断言（old 出现次数==count）、后置断言（应用后 new 出现次数==count），字节级读写保真（CRLF 归一），任一失败 `exit 1` 并打印该条上下文 ±3 行：
+列约定（硬性）：
 
-```python
-import sys
+- **行号**：编辑行=被替换旧块首行的 1 基行号（主会话或 prospector 勘探得到）；新文件置 `-`。
+- **锚点**：该行应包含的短子串——补丁执行前断言该行含此子串，不符即失败停报（防行号漂移误改）；新文件置 `-`。
+- **旧行数**：被替换的旧块行数（1 行改动写 1，删除 n 行写 n 且新内容留空按编译器空语义、跨行替换写实际行数）；新文件置 `-`。
+- **新内容**：完整替换文本，换行一律转义为 `<NL>`（表格单元格不得含真实换行）；新文件以 `<NEWFILE>` 前缀开头，其后为全文（同样 `<NL>` 转义）。
+- 单元格内的 `|` 字符须转义为 `\|`。
 
-PATCHES = [
-    {"file": "<项目相对路径>", "old": "<old 精确片段>", "new": "<new 文本>", "count": 1},
-    # 新文件：{"file": "<路径>", "old": None, "new": "<新文件全文>", "expect_after": "<写后断言应包含的文本>"},
-    # 注：new 为空串（纯删除）或 new 预存多处时改用 patch-mode: edit 路径并在执行书注明。
-]
+## expect_after
 
-def fail(p, msg, lines, hit):  # 打印该条条目上下文 ±3 行后 exit 1
-    ctx = "\n".join("%4d %s" % (i + 1, l) for i, l in enumerate(lines) if abs(i - hit) <= 3)
-    print("[patch-direct] FAIL %s: %s\n%s" % (p["file"], msg, ctx))
-    sys.exit(1)
+<可选节：应用后断言（多用于新文件与关键替换）。列：文件 / 包含子串；无后置断言可整节省略。>
 
-for p in PATCHES:
-    # CRLF 保真：字节读写+EOL 归一
-    if p["old"] is None:  # 新文件分支：字节写 + 后置断言（文件存在且含 expect_after）
-        open(p["file"], "wb").write(p["new"].encode("utf-8"))
-        data = open(p["file"], "rb").read().decode("utf-8")
-        if p.get("expect_after") is None or p["expect_after"] not in data:
-            fail(p, "后置断言：新文件不含 expect_after", data.split("\n"), 0)
-        continue
-    count = p.get("count", 1)  # 声明出现次数（默认 1）
-    data = open(p["file"], "rb").read().decode("utf-8")
-    if "\r\n" in data:  # 目标文件含 CRLF → old/new 的 \n 归一为 \r\n 再替换
-        old, new = p["old"].replace("\n", "\r\n"), p["new"].replace("\n", "\r\n")
-    else:
-        old, new = p["old"], p["new"]
-    n_old = data.count(old)
-    if n_old != count:  # 前置断言：old 出现次数==声明值 count
-        hit = data.find(old)
-        fail(p, "前置断言：old 出现 %d 次（声明 %d）" % (n_old, count),
-             data.split("\n"), data[:hit].count("\n") if hit != -1 else 0)
-    text = data.replace(old, new)
-    if text.count(new) != count:  # 后置断言：new 出现次数==count
-        fail(p, "后置断言：new 出现 %d 次（声明 %d）" % (text.count(new), count), text.split("\n"), 0)
-    open(p["file"], "wb").write(text.encode("utf-8"))
-print("[patch-direct] OK: %d patches applied" % len(PATCHES))
-```
+| 文件 | 包含子串 |
+| --- | --- |
+| <项目相对路径> | <写后/改后文件必须包含的子串> |
 
-## 执行命令
+## 验证
 
-worker 单轮内**一条 Bash 原样执行**本字段（补丁+验证串联，`&&` 保证补丁失败即短路；stdin heredoc，不落盘任何临时文件；禁止改写/拆分/增删步骤）：
+<必填：编译后由 worker 与补丁管道串联执行的验证命令（绝对/项目相对路径、`&&` 串联、
+显式 timeout）。编译器校验本节存在并原样透传执行提示；缺本节编译报错。>
 
 ```bash
-python - <<'PYEOF' && <验证命令，含显式 timeout>
-<补丁脚本全文（与上节逐字一致）>
-PYEOF
+node scripts/compile-change.mjs docs/changes/<slug>.md | python - && <验证命令，含显式 timeout>
 ```
 
-补丁不适用场景（新文件全文写入、跨多处的结构性重写等）显式声明 `patch-mode: edit` 走 Edit 备选：按"定位行号"列定向 Read（禁止全文件读入），Edit 锚点用最短唯一片段。
+编译失败（缺表/缺验证/解析报错，exit 非零）→ fallback `patch-mode: edit`：改动清单表
+（v1.5.1 文本级精确 old→new + 定位行号）+ 定向 Read（禁止全文件读入）+ 最短唯一锚点 Edit。
 
-<!-- 变更单结构（v1.5.1 统一）：frontmatter + 四行骨架（改什么/为什么/影响面/回滚方式）
-     + 改动清单表（必含，行数不计入骨架行数约束；勘探由主会话亲自 Read/Grep 完成，
-     old 片段逐字符精确、须在文件内唯一，new 为完整替换文本）。单问批准后写入，
-     status 保持 approved。
-     M 级共用本模板：tier 改为 M，说明部分可加长至 15 行（改动清单表行数不计入），
-     并在下方追加"验收标准"3-5 条 `- [ ]` checklist。 -->
+<!-- 变更单结构（v1.8.0 统一，表格驱动）：frontmatter（slug/status/date/tier/changed-files）
+     + 四行骨架（改什么/为什么/影响面/回滚方式）+ "## 变更表"（必含，列定义与
+     compile-change.mjs 对齐；行号+锚点断言取代逐字符 old 转录）+ "## expect_after"
+     （可选）+ "## 验证"（必含，缺则编译失败）。单问批准后写入，status 保持 approved。
+     M 级共用本模板：tier 改为 M，说明部分可加长至 15 行（变更表行数不计入），
+     并在"## 验证"之外追加"验收标准"3-5 条 `- [ ]` checklist。
+     reviewer 侧机器预检：node scripts/review-lint.mjs docs/changes/<slug>.md [--diff-cmd
+     "git diff"]——文件集/行数上限/占位符/验证字段四类清零后再做语义四维。 -->

@@ -76,14 +76,116 @@ function latchFileFor(sessionId, homeDir) {
 }
 
 // 注入决策：无 id → inject（现状全文）；首轮 → inject-full（全文+提醒句，写闩锁）；次轮 → inject-reminder（一行）
-function decideInjection(sessionId, latchExists) {
+// v1.8.0 动态状态行（规格 2.C）：phaseHint 非空时末尾追加一行【当前状态】——首轮全文与一行提醒均追加；
+// 缺省/空串（无 docs 项目）不加，旧文案逐字符不变（闩锁回归约束）。
+function decideInjection(sessionId, latchExists, phaseHint) {
+  const hint = phaseHint ? '\n' + phaseHint : '';
   if (!sessionId) {
-    return { decision: 'inject', text: CONTEXT_TEXT, createLatch: false };
+    return { decision: 'inject', text: CONTEXT_TEXT + hint, createLatch: false };
   }
   if (!latchExists) {
-    return { decision: 'inject-full', text: CONTEXT_TEXT + LATCH_NOTICE, createLatch: true };
+    return { decision: 'inject-full', text: CONTEXT_TEXT + LATCH_NOTICE + hint, createLatch: true };
   }
-  return { decision: 'inject-reminder', text: REMINDER_TEXT, createLatch: false };
+  return { decision: 'inject-reminder', text: REMINDER_TEXT + hint, createLatch: false };
+}
+
+// ---- v1.8.0 computePhaseHint：轻量扫项目 docs → 一行【当前状态】（五态按优先级 first-match） ----
+// 状态机与 scripts/flow-status.mjs 同源压缩为五态：
+//   待批准（draft spec/变更单，或 approved 但 wireframe 声明未批）→ 请呈报批准
+//   待实现（approved 但无实现标记）→ 进入实现
+//   缺 test-report（已实现但缺测试报告；tier: S 免 test-report 不查）→ 补验收测试报告
+//   缺 review-report（缺审查报告；spec review: exempt 不查）→ 委派 reviewer
+//   全部合规 → 可定稿
+// 扫描面：docs/specs frontmatter（status/wireframe/review）+ docs/changes frontmatter
+//（status/tier）+ <slug>.test/review-report.json 存在性（specs/ 或 changes/ 任一目录）+
+// 实现标记（报告已存在或 docs/tasks/<slug>.md / <slug>-exec.md）。无 docs 目录 / 无含
+// frontmatter 的条目 → 返回 ''（不加状态行）。
+function parseFmLite(md) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(md);
+  if (!m) return null; // 无 frontmatter：轻量判定，宁缺毋滥，不参与状态计算
+  const fields = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line.trim());
+    if (kv) fields[kv[1]] = kv[2].trim();
+  }
+  return fields;
+}
+
+function listMdLite(dir) {
+  try {
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
+  } catch (e) {
+    return [];
+  }
+}
+
+const PHASE_STATES = [
+  { key: '待批准', next: '请呈报批准' },
+  { key: '待实现', next: '进入实现' },
+  { key: '缺 test-report', next: '补验收测试报告' },
+  { key: '缺 review-report', next: '委派 reviewer' },
+  { key: '全部合规', next: '可定稿' },
+];
+
+function computePhaseHint(projectRoot) {
+  const specsDir = path.join(projectRoot, 'docs', 'specs');
+  const changesDir = path.join(projectRoot, 'docs', 'changes');
+  if (!existsSyncSafe(specsDir) && !existsSyncSafe(changesDir)) return '';
+
+  const groups = {};
+  for (const s of PHASE_STATES) groups[s.key] = [];
+
+  const hasReport = (slug, kind) =>
+    existsSyncSafe(path.join(specsDir, slug + '.' + kind + '-report.json')) ||
+    existsSyncSafe(path.join(changesDir, slug + '.' + kind + '-report.json'));
+
+  const scanDir = (dir) => {
+    for (const name of listMdLite(dir)) {
+      let fm;
+      try {
+        fm = parseFmLite(fs.readFileSync(path.join(dir, name), 'utf8'));
+      } catch (e) {
+        continue;
+      }
+      if (!fm) continue;
+      const slug = fm.slug || name.replace(/\.md$/, '');
+      const status = String(fm.status || 'draft').toLowerCase();
+      const wireframe = fm.wireframe === undefined ? '' : String(fm.wireframe).toLowerCase();
+      const review = String(fm.review || '').toLowerCase();
+      const tier = String(fm.tier || '').toLowerCase();
+      const hasTest = hasReport(slug, 'test');
+      const hasReview = hasReport(slug, 'review');
+      const implemented =
+        hasTest || hasReview ||
+        existsSyncSafe(path.join(projectRoot, 'docs', 'tasks', slug + '.md')) ||
+        existsSyncSafe(path.join(projectRoot, 'docs', 'tasks', slug + '-exec.md'));
+
+      let key;
+      if (status === 'draft' || (status === 'approved' && wireframe !== '' && wireframe !== 'approved')) {
+        key = '待批准';
+      } else if (!implemented) {
+        key = '待实现';
+      } else if (!hasTest && tier !== 's') {
+        key = '缺 test-report';
+      } else if (!hasReview && review !== 'exempt') {
+        key = '缺 review-report';
+      } else {
+        key = '全部合规';
+      }
+      groups[key].push(slug);
+    }
+  };
+  scanDir(specsDir);
+  scanDir(changesDir);
+
+  const total = PHASE_STATES.reduce((n, s) => n + groups[s.key].length, 0);
+  if (total === 0) return '';
+  for (const s of PHASE_STATES) {
+    if (groups[s.key].length > 0) {
+      return '【当前状态】' + s.key + '：' + groups[s.key].join('、') + '（' + s.next + '）';
+    }
+  }
+  return '';
 }
 
 // 输出文本裁决（P2-1）：inject-full 且闩锁未成功落盘 → 回退纯 CONTEXT_TEXT（不带提示句）。
@@ -198,7 +300,18 @@ async function main() {
 
   const sessionId = extractSessionId(payload);
   const latchFile = sessionId ? latchFileFor(sessionId) : null;
-  const plan = decideInjection(sessionId, latchFile ? existsSyncSafe(latchFile) : false);
+  // v1.8.0 动态状态行：按项目根（ZCODE_PROJECT_DIR 优先，回退 cwd）轻量扫 docs →【当前状态】
+  // 一行；无 docs 不加；扫描异常 fail-open（hint=''，不影响注入主体）。
+  const projectRoot = process.env.ZCODE_PROJECT_DIR
+    ? path.resolve(process.env.ZCODE_PROJECT_DIR)
+    : process.cwd();
+  let phaseHint = '';
+  try {
+    phaseHint = computePhaseHint(projectRoot);
+  } catch (e) {
+    phaseHint = '';
+  }
+  const plan = decideInjection(sessionId, latchFile ? existsSyncSafe(latchFile) : false, phaseHint);
 
   let latchPersisted = true;
   if (plan.createLatch && latchFile) {
@@ -251,6 +364,7 @@ module.exports = {
   extractSessionId,
   sanitizeSessionId,
   latchFileFor,
+  computePhaseHint,
   decideInjection,
   outputTextFor,
   staleLatchFiles,
