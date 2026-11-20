@@ -331,6 +331,266 @@ function isAcceptanceDelegation(prompt) {
   return ACCEPTANCE_REPORT_RE.test(prompt);
 }
 
+// ---- v1.7.0 Bash 写模式检测（补丁直改配套，堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
+// parseBashWriteTargets：解析命令中的显式文件写入模式，返回目标路径数组（去重保序）。
+// 目标无法确定（$(...) 替换、heredoc 喂程序、patch 读 stdin 等）时返回 'opaque' 标记项，
+// main() 的 Bash 分支对 opaque 放行并记日志 bash-write-opaque（可统计、可后续收紧）。
+const BASH_WRITE_OPAQUE = 'opaque';
+
+// 引号感知分词：单/双引号包裹的 token 记 quoted（内容去引号）；
+// 反斜杠按字面字符处理（Windows 路径兼容，不做转义解释）。
+function tokenizeBashSegment(seg) {
+  const tokens = [];
+  let cur = '';
+  let quoted = false;
+  let quote = null;
+  let started = false;
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i];
+    if (quote) {
+      if (c === quote) {
+        quote = null;
+      } else {
+        cur += c;
+      }
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      quoted = true;
+      started = true;
+      continue;
+    }
+    if (c === ' ' || c === '\t') {
+      if (started) tokens.push({ text: cur, quoted: quoted });
+      cur = '';
+      quoted = false;
+      started = false;
+      continue;
+    }
+    cur += c;
+    started = true;
+  }
+  if (started) tokens.push({ text: cur, quoted: quoted });
+  return tokens;
+}
+
+function pushUnique(arr, value) {
+  if (arr.indexOf(value) === -1) arr.push(value);
+}
+
+function normalizeDevNull(p) {
+  return String(p).replace(/\\/g, '/').toLowerCase() === '/dev/null' ? '/dev/null' : p;
+}
+
+// 目标 token 分类：kind='target'（确定路径）/ 'opaque'（目标无法确定）/ 'ignore'（>&1 等 fd 复制）
+function readPathTokenAt(seg, pos) {
+  let i = pos;
+  while (i < seg.length && (seg[i] === ' ' || seg[i] === '\t')) i++;
+  if (i >= seg.length) return { value: '', kind: 'opaque' };
+  if (seg[i] === "'" || seg[i] === '"') {
+    const end = seg.indexOf(seg[i], i + 1);
+    if (end === -1) return { value: '', kind: 'opaque' };
+    const inner = seg.slice(i + 1, end);
+    if (/\$\(|`/.test(inner)) return { value: '', kind: 'opaque' };
+    return { value: inner, kind: 'target' };
+  }
+  let j = i;
+  while (j < seg.length && ' \t&|;()<>'.indexOf(seg[j]) === -1) {
+    j++;
+  }
+  const raw = seg.slice(i, j);
+  if (raw === '') return { value: '', kind: 'opaque' };
+  if (/\$\(|`/.test(raw) || raw[0] === '$') return { value: '', kind: 'opaque' };
+  if (/^[&(]/.test(raw)) return { value: '', kind: 'ignore' };
+  return { value: raw, kind: 'target' };
+}
+
+// 单段重定向扫描（引号外字符级）：>> / > / 1> / &> 记写入目标；2> 忽略（stderr）；
+// << 记 opaque（heredoc 喂程序，写入目标不可知）；单个 < 的目标仅 patch / git apply 使用。
+// 返回引号外最后一个 < 的目标 { value, kind }（无则为 kind='none'）。
+function scanSegmentWrites(seg, targets) {
+  let input = { value: '', kind: 'none' };
+  let i = 0;
+  while (i < seg.length) {
+    const c = seg[i];
+    if (c === "'" || c === '"') {
+      const end = seg.indexOf(c, i + 1);
+      i = end === -1 ? seg.length : end + 1;
+      continue;
+    }
+    if (c === '<') {
+      if (seg[i + 1] === '<') {
+        pushUnique(targets, BASH_WRITE_OPAQUE);
+        i += 2;
+        continue;
+      }
+      input = readPathTokenAt(seg, i + 1);
+      i += 1;
+      continue;
+    }
+    if (c === '>') {
+      let fd = '1';
+      if (i > 0) {
+        const p = seg[i - 1];
+        const boundary = i - 2 < 0 || seg[i - 2] === ' ' || seg[i - 2] === '\t';
+        if (p === '2' && boundary) fd = '2';
+        else if (p === '&' && boundary) fd = '&';
+      }
+      const append = seg[i + 1] === '>';
+      const after = i + (append ? 2 : 1);
+      const t = readPathTokenAt(seg, after);
+      if (fd === '2') {
+        // stderr 重定向忽略（2>err / 2>&1 均不视为代码写入目标）
+      } else if (t.kind === 'opaque') {
+        pushUnique(targets, BASH_WRITE_OPAQUE);
+      } else if (t.kind === 'target') {
+        pushUnique(targets, normalizeDevNull(t.value));
+      }
+      i = after;
+      continue;
+    }
+    i += 1;
+  }
+  return input;
+}
+
+// 单段命令级写入（重定向已由 scanSegmentWrites 处理）：tee / sed -i / patch / git apply
+function scanCommandWrites(tokens, input, targets) {
+  if (tokens.length === 0) return;
+  const cmd = tokens[0].text.replace(/^\(+/, ''); // 子壳 ( echo … )
+  if (cmd === 'tee') {
+    for (const t of tokens.slice(1)) {
+      if (t.text.startsWith('-')) continue; // -a / --append 等旗标
+      if (/\$\(|`/.test(t.text) || t.text[0] === '$') {
+        pushUnique(targets, BASH_WRITE_OPAQUE);
+        continue;
+      }
+      pushUnique(targets, t.text);
+    }
+    return;
+  }
+  if (cmd === 'sed') {
+    scanSedInPlace(tokens.slice(1), targets);
+    return;
+  }
+  if (cmd === 'patch') {
+    scanPatchInput(tokens.slice(1), input, targets);
+    return;
+  }
+  if (cmd === 'git' && tokens.length > 1 && tokens[1].text === 'apply') {
+    scanPatchInput(tokens.slice(2), input, targets);
+  }
+}
+
+// sed -i：有 -i / --in-place 才是写；-e/-f/--expression/--file 连带参数跳过；
+// 无 -e/-f 时首个非选项操作数是 sed 脚本，其后为文件；有 -e/-f 时非选项操作数均为文件。
+function scanSedInPlace(args, targets) {
+  let hasInPlace = false;
+  let scriptViaOption = false;
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i].text;
+    if (a === '--') {
+      i++;
+      break;
+    }
+    if (a === '-i' || a === '--in-place' || /^-i./.test(a) || a.indexOf('--in-place=') === 0) {
+      hasInPlace = true;
+      i++;
+      continue;
+    }
+    if (a === '-e' || a === '--expression' || a === '-f' || a === '--file' || a === '--regexp-file') {
+      scriptViaOption = true;
+      i += 2; // 选项 + 其参数（脚本）
+      continue;
+    }
+    if (a.startsWith('-') && a !== '-') {
+      i++;
+      continue;
+    }
+    break;
+  }
+  if (!hasInPlace) return;
+  const operands = args.slice(i);
+  const files = scriptViaOption ? operands : operands.slice(1);
+  for (const f of files) {
+    if (/\$\(|`/.test(f.text) || f.text[0] === '$') {
+      pushUnique(targets, BASH_WRITE_OPAQUE);
+      continue;
+    }
+    pushUnique(targets, f.text);
+  }
+}
+
+// patch / git apply：<补丁文件>（或 < 重定向喂入）：两者均改写代码文件；
+// 读 stdin / heredoc / $(...) 等目标不可知 → opaque
+function scanPatchInput(args, input, targets) {
+  if (input && input.kind === 'opaque') {
+    pushUnique(targets, BASH_WRITE_OPAQUE);
+    return;
+  }
+  if (input && input.kind === 'target') {
+    pushUnique(targets, input.value);
+    return;
+  }
+  let i = 0;
+  while (i < args.length && args[i].text.startsWith('-') && args[i].text !== '-') {
+    const a = args[i].text;
+    if (a === '-i' || a === '--input') {
+      const nxt = args[i + 1];
+      if (nxt) {
+        if (/\$\(|`/.test(nxt.text) || nxt.text[0] === '$') pushUnique(targets, BASH_WRITE_OPAQUE);
+        else pushUnique(targets, nxt.text);
+        return;
+      }
+    }
+    i++;
+  }
+  const rest = args.slice(i);
+  if (rest.length === 0) {
+    pushUnique(targets, BASH_WRITE_OPAQUE); // 读 stdin/heredoc：改写目标不可知
+    return;
+  }
+  if (/\$\(|`/.test(rest[0].text) || rest[0].text[0] === '$') {
+    pushUnique(targets, BASH_WRITE_OPAQUE);
+    return;
+  }
+  pushUnique(targets, rest[0].text);
+}
+
+// v1.7.0 纯函数：识别 Bash 命令中的显式文件写入模式，返回目标路径数组（去重保序）。
+// 覆盖：重定向 > / >>（2> 忽略、/dev/null 归一保留）、tee（含 -a）、sed -i、
+// patch <f / git apply f；多命令（&&、||、;、|、换行分隔）逐一解析；引号路径兼容、
+// 反斜杠按字面字符（Windows 兼容）；无法确定目标的写入（$(...)、heredoc 等）返回 'opaque'。
+function parseBashWriteTargets(command) {
+  const targets = [];
+  if (typeof command !== 'string' || command === '') return targets;
+  const segments = command.split(/&&|\|\||;|\||\r?\n/);
+  for (const rawSeg of segments) {
+    const seg = rawSeg.trim();
+    if (!seg) continue;
+    const tokens = tokenizeBashSegment(seg);
+    const input = scanSegmentWrites(seg, targets);
+    scanCommandWrites(tokens, input, targets);
+  }
+  return targets;
+}
+
+function getBashCommand(payload) {
+  const inputs = [];
+  if (payload && typeof payload.tool_input === 'object' && payload.tool_input) {
+    inputs.push(payload.tool_input);
+  }
+  if (payload && typeof payload.tool === 'object' && payload.tool && payload.tool.input) {
+    inputs.push(payload.tool.input);
+  }
+  for (const input of inputs) {
+    if (typeof input.command === 'string' && input.command.trim() !== '') return input.command;
+  }
+  return null;
+}
+
 function deny(reason) {
   const out = {
     hookSpecificOutput: {
@@ -451,13 +711,54 @@ async function main() {
     return 0;
   }
 
+  // ---- v1.7.0 Bash 写模式检测（补丁直改配套：堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
+  if (toolName === 'Bash') {
+    const command = getBashCommand(payload);
+    if (!command) {
+      appendLog('PreToolUse', 'Bash', '', 'allow', 'no command');
+      return 0;
+    }
+    let targets = [];
+    try {
+      targets = parseBashWriteTargets(command);
+    } catch (e) {
+      process.stderr.write('[dev-sop] failed to parse bash command: ' + (e && e.message) + '\n');
+      appendLog('PreToolUse', 'Bash', command.slice(0, 120), 'error', 'parse bash: ' + (e && e.message));
+      return 0;
+    }
+    if (targets.indexOf(BASH_WRITE_OPAQUE) !== -1) {
+      appendLog('PreToolUse', 'Bash', command.slice(0, 120), 'allow', 'bash-write-opaque');
+      return 0;
+    }
+    for (const target of targets) {
+      const normalized = String(target).replace(/\\/g, '/');
+      if (normalized === '/dev/null') continue; // >/dev/null 豁免
+      if (/\.(md|json)$/i.test(normalized)) continue; // .md/.json 文档豁免
+      const rc = gateFileWrite(toolName, target);
+      if (rc !== 0) return rc; // 任一目标命中 deny 即输出对应 deny JSON
+    }
+    appendLog(
+      'PreToolUse',
+      'Bash',
+      command.slice(0, 120),
+      'allow',
+      targets.length > 0 ? 'bash write targets passed gate' : 'no explicit bash write target'
+    );
+    return 0;
+  }
+
   // ---- Edit / Write / ApplyPatch ----
   const rawFile = pickFilePath(payload);
   if (!rawFile) {
     appendLog('PreToolUse', toolName, '', 'allow', 'no target file');
     return 0;
   }
+  return gateFileWrite(toolName, rawFile);
+}
 
+// v1.7.0：单文件写入门禁链（Write/Edit 与 Bash 写检测共用，语义与文案完全一致）：
+// isWhitelisted → skip 文件 → UI 门禁（wireframe）→ approved spec → approved 变更单 → deny
+function gateFileWrite(toolName, rawFile) {
   let absFile;
   let projectRoot;
   try {
@@ -556,4 +857,6 @@ module.exports = {
   hasExecPlanReference,
   isAcceptanceDelegation,
   EXEC_PLAN_DENY_REASON,
+  parseBashWriteTargets,
+  BASH_WRITE_OPAQUE,
 };
