@@ -21,14 +21,15 @@ changed-files: <目标代码文件，逗号分隔的项目相对路径>
 
 ## 补丁脚本
 
-默认路径（v1.7.0 补丁直改）：主会话勘探后把逐条 old→new 生成确定性补丁脚本（Python 标准库，无第三方依赖）全文嵌入本节——PATCHES 逐条四元组 `{file, old, new, expect_after}`，前置断言（old 存在且出现次数=声明值）、后置断言（应用后 new 出现次数=expect_after），任一失败 `exit 1` 并打印该条上下文 ±3 行：
+默认路径（v1.7.0 补丁直改）：主会话勘探后把逐条 old→new 生成确定性补丁脚本（Python 标准库，无第三方依赖）全文嵌入本节——PATCHES 逐条 `{file, old, new, count, expect_after}`（count 声明出现次数，默认 1；expect_after 仅新文件分支用：写后断言文件存在且含该文本），前置断言（old 出现次数==count）、后置断言（应用后 new 出现次数==count），字节级读写保真（CRLF 归一），任一失败 `exit 1` 并打印该条上下文 ±3 行：
 
 ```python
 import sys
 
 PATCHES = [
-    {"file": "<项目相对路径>", "old": "<old 精确片段>", "new": "<new 文本>", "expect_after": 1},
-    # 新文件：{"file": "<路径>", "old": None, "new": "<新文件全文>", "expect_after": 1},
+    {"file": "<项目相对路径>", "old": "<old 精确片段>", "new": "<new 文本>", "count": 1},
+    # 新文件：{"file": "<路径>", "old": None, "new": "<新文件全文>", "expect_after": "<写后断言应包含的文本>"},
+    # 注：new 为空串（纯删除）或 new 预存多处时改用 patch-mode: edit 路径并在执行书注明。
 ]
 
 def fail(p, msg, lines, hit):  # 打印该条条目上下文 ±3 行后 exit 1
@@ -37,17 +38,28 @@ def fail(p, msg, lines, hit):  # 打印该条条目上下文 ±3 行后 exit 1
     sys.exit(1)
 
 for p in PATCHES:
-    if p["old"] is None:  # 新文件全文写入
-        open(p["file"], "w", encoding="utf-8", newline="").write(p["new"])
+    # CRLF 保真：字节读写+EOL 归一
+    if p["old"] is None:  # 新文件分支：字节写 + 后置断言（文件存在且含 expect_after）
+        open(p["file"], "wb").write(p["new"].encode("utf-8"))
+        data = open(p["file"], "rb").read().decode("utf-8")
+        if p.get("expect_after") is None or p["expect_after"] not in data:
+            fail(p, "后置断言：新文件不含 expect_after", data.split("\n"), 0)
         continue
-    lines = open(p["file"], encoding="utf-8").read().split("\n")
-    hits = [i for i, l in enumerate(lines) if p["old"] in l]
-    if len(hits) != 1:  # 前置断言：old 存在且唯一（次数=声明值）
-        fail(p, "old 命中 %d 次（须唯一）" % len(hits), lines, hits[0] if hits else 0)
-    text = "\n".join(lines).replace(p["old"], p["new"], 1)
-    if text.count(p["new"]) < p["expect_after"]:  # 后置断言：new 出现次数=expect_after
-        fail(p, "后置断言：new 出现次数不足", text.split("\n"), 0)
-    open(p["file"], "w", encoding="utf-8", newline="").write(text)
+    count = p.get("count", 1)  # 声明出现次数（默认 1）
+    data = open(p["file"], "rb").read().decode("utf-8")
+    if "\r\n" in data:  # 目标文件含 CRLF → old/new 的 \n 归一为 \r\n 再替换
+        old, new = p["old"].replace("\n", "\r\n"), p["new"].replace("\n", "\r\n")
+    else:
+        old, new = p["old"], p["new"]
+    n_old = data.count(old)
+    if n_old != count:  # 前置断言：old 出现次数==声明值 count
+        hit = data.find(old)
+        fail(p, "前置断言：old 出现 %d 次（声明 %d）" % (n_old, count),
+             data.split("\n"), data[:hit].count("\n") if hit != -1 else 0)
+    text = data.replace(old, new)
+    if text.count(new) != count:  # 后置断言：new 出现次数==count
+        fail(p, "后置断言：new 出现 %d 次（声明 %d）" % (text.count(new), count), text.split("\n"), 0)
+    open(p["file"], "wb").write(text.encode("utf-8"))
 print("[patch-direct] OK: %d patches applied" % len(PATCHES))
 ```
 

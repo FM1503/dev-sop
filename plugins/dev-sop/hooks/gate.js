@@ -25,6 +25,12 @@ const UI_DENY_REASON =
   'UI 文件的编写需要规格文档中线框图已获用户批准（spec frontmatter 需含 wireframe: approved）。' +
   '请先在 spec 中产出 UI 数据表与 ASCII 线框图，经用户批准后添加标记，或创建 .dev-sop-skip。';
 
+// 修复轮2（fail-closed）：Bash 写入痕迹（含 opaque）过门禁链被拒时的拒绝原因
+const BASH_WRITE_DENY_REASON =
+  '检测到疑似文件写入的命令，已按文件门禁校验；' +
+  '合法写入需已批准的变更单/spec，或调整命令避免歧义。' +
+  '涉及 UI 文件的写入需 wireframe: approved（见 Write/Edit 门禁）';
+
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
 
 function appendLog(event, tool, target, decision, reason) {
@@ -333,12 +339,15 @@ function isAcceptanceDelegation(prompt) {
 
 // ---- v1.7.0 Bash 写模式检测（补丁直改配套，堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
 // parseBashWriteTargets：解析命令中的显式文件写入模式，返回目标路径数组（去重保序）。
-// 目标无法确定（$(...) 替换、heredoc 喂程序、patch 读 stdin 等）时返回 'opaque' 标记项，
-// main() 的 Bash 分支对 opaque 放行并记日志 bash-write-opaque（可统计、可后续收紧）。
+// 目标无法确定（$(...) 替换、heredoc 喂程序、patch 读 stdin 等）时返回 'opaque' 标记项；
+// 修复轮2（fail-closed）：main() 的 Bash 分支对非空目标集（含 opaque、含任何未能确证
+// 为安全的写入痕迹）执行完整门禁链，放行仅当门禁通过，日志记 bash-write-gated
+//（取代 bash-write-opaque 放行语义，opaque 标记保留供日志细节）。
 const BASH_WRITE_OPAQUE = 'opaque';
 
-// 引号感知分词：单/双引号包裹的 token 记 quoted（内容去引号）；
-// 反斜杠按字面字符处理（Windows 路径兼容，不做转义解释）。
+// 引号感知分词（修复轮2：统一 splitCommands 同款扫描器）：' " ` 包裹的 token 记
+// quoted（内容去引号）；反斜杠转义保形——双引号/反引号内 \" \` 与引号外 \X（含 \'）
+// 均保留两字符原文（Windows 路径兼容，切分层不解释内容）。
 function tokenizeBashSegment(seg) {
   const tokens = [];
   let cur = '';
@@ -348,6 +357,11 @@ function tokenizeBashSegment(seg) {
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i];
     if (quote) {
+      if (c === '\\' && quote !== "'" && i + 1 < seg.length) {
+        cur += c + seg[i + 1]; // "/` 内反斜杠转义保形
+        i++;
+        continue;
+      }
       if (c === quote) {
         quote = null;
       } else {
@@ -355,7 +369,12 @@ function tokenizeBashSegment(seg) {
       }
       continue;
     }
-    if (c === "'" || c === '"') {
+    if (c === '\\' && i + 1 < seg.length) {
+      cur += c + seg[i + 1]; // 引号外反斜杠转义保形（\; \| \> 不构成特殊字符）
+      i++;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
       quote = c;
       quoted = true;
       started = true;
@@ -379,19 +398,31 @@ function pushUnique(arr, value) {
   if (arr.indexOf(value) === -1) arr.push(value);
 }
 
+// 修复轮 P2：Windows NUL 空设备（nul / ./nul，大小写归一）豁免同 /dev/null（> NUL / >> NUL）
 function normalizeDevNull(p) {
-  return String(p).replace(/\\/g, '/').toLowerCase() === '/dev/null' ? '/dev/null' : p;
+  const norm = String(p).replace(/\\/g, '/').toLowerCase();
+  return norm === '/dev/null' || norm === 'nul' || norm === './nul' ? '/dev/null' : p;
 }
 
-// 目标 token 分类：kind='target'（确定路径）/ 'opaque'（目标无法确定）/ 'ignore'（>&1 等 fd 复制）
+// 目标 token 分类：kind='target'（确定路径）/ 'opaque'（目标无法确定）/ 'ignore'（>&1 等 fd 复制）；
+// 引号目标扫描与 splitCommands 同款（修复轮2：双引号/反引号内反斜杠转义保形）
 function readPathTokenAt(seg, pos) {
   let i = pos;
   while (i < seg.length && (seg[i] === ' ' || seg[i] === '\t')) i++;
   if (i >= seg.length) return { value: '', kind: 'opaque' };
   if (seg[i] === "'" || seg[i] === '"') {
-    const end = seg.indexOf(seg[i], i + 1);
-    if (end === -1) return { value: '', kind: 'opaque' };
-    const inner = seg.slice(i + 1, end);
+    const q = seg[i];
+    let j = i + 1;
+    while (j < seg.length) {
+      if (seg[j] === '\\' && q !== "'" && j + 1 < seg.length) {
+        j += 2; // 双引号内反斜杠转义保形（不误认 \" 为闭引号）
+        continue;
+      }
+      if (seg[j] === q) break;
+      j += 1;
+    }
+    if (j >= seg.length) return { value: '', kind: 'opaque' };
+    const inner = seg.slice(i + 1, j);
     if (/\$\(|`/.test(inner)) return { value: '', kind: 'opaque' };
     return { value: inner, kind: 'target' };
   }
@@ -406,17 +437,33 @@ function readPathTokenAt(seg, pos) {
   return { value: raw, kind: 'target' };
 }
 
-// 单段重定向扫描（引号外字符级）：>> / > / 1> / &> 记写入目标；2> 忽略（stderr）；
+// 单段重定向扫描（修复轮2：引号态统一 splitCommands 同款扫描器——' " ` 引号 +
+// 反斜杠转义，仅引号外字符参与重定向判定）：>> / > / 1> / &> 记写入目标；2> 忽略
+// （stderr）；>&N fd 复制（>&2 / 2>&1）忽略，>& 文件名（古式 >&out.log）记 opaque；
 // << 记 opaque（heredoc 喂程序，写入目标不可知）；单个 < 的目标仅 patch / git apply 使用。
 // 返回引号外最后一个 < 的目标 { value, kind }（无则为 kind='none'）。
 function scanSegmentWrites(seg, targets) {
   let input = { value: '', kind: 'none' };
+  let quote = null;
   let i = 0;
   while (i < seg.length) {
     const c = seg[i];
-    if (c === "'" || c === '"') {
-      const end = seg.indexOf(c, i + 1);
-      i = end === -1 ? seg.length : end + 1;
+    if (quote) {
+      if (c === '\\' && quote !== "'" && i + 1 < seg.length) {
+        i += 2; // 双引号/反引号内反斜杠转义保形
+        continue;
+      }
+      if (c === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (c === '\\' && i + 1 < seg.length) {
+      i += 2; // 引号外反斜杠转义下一字符（\> \| 等不构成重定向/分隔符）
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      quote = c;
+      i += 1;
       continue;
     }
     if (c === '<') {
@@ -436,6 +483,15 @@ function scanSegmentWrites(seg, targets) {
         const boundary = i - 2 < 0 || seg[i - 2] === ' ' || seg[i - 2] === '\t';
         if (p === '2' && boundary) fd = '2';
         else if (p === '&' && boundary) fd = '&';
+      }
+      if (seg[i + 1] === '&') {
+        // 修复轮2：>&N fd 复制（>&2 / 2>&1）忽略；>& 文件名（古式 >& out.log）→ opaque
+        const t = readPathTokenAt(seg, i + 2);
+        if (!(t.kind === 'target' && /^[0-9]$/.test(t.value))) {
+          pushUnique(targets, BASH_WRITE_OPAQUE);
+        }
+        i += 2;
+        continue;
       }
       const append = seg[i + 1] === '>';
       const after = i + (append ? 2 : 1);
@@ -559,18 +615,103 @@ function scanPatchInput(args, input, targets) {
   pushUnique(targets, rest[0].text);
 }
 
+// 修复轮 P1-1：引号感知命令切分——逐字符扫描，跟踪 '、"、` 引号态与反斜杠转义，
+// 仅在引号外切分 &&/||/;/|/换行；未闭合引号时整段视为一条并整体标记 opaque
+//（安全侧：目标不可知 → fail-closed 门禁校验，绝不因引号截断漏判写入目标）。
+function splitCommands(command) {
+  const parts = [];
+  let cur = '';
+  let quote = null; // 当前引号字符（' " `）或 null
+  let i = 0;
+  while (i < command.length) {
+    const c = command[i];
+    if (quote) {
+      if (c === '\\' && quote !== "'" && i + 1 < command.length) {
+        cur += c + command[i + 1]; // "/` 内反斜杠转义保形（切分层不解释内容）
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      cur += c;
+      i += 1;
+      continue;
+    }
+    if (c === '\\' && i + 1 < command.length) {
+      cur += c + command[i + 1]; // 引号外反斜杠转义下一字符（\; \| \& 不构成切分点）
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {
+      quote = c;
+      cur += c;
+      i += 1;
+      continue;
+    }
+    const two = command.slice(i, i + 2);
+    if (two === '&&' || two === '||' || c === ';' || c === '|' || c === '\n' || c === '\r') {
+      if (cur.trim() !== '') parts.push(cur);
+      cur = '';
+      i += two === '&&' || two === '||' ? 2 : 1;
+      continue;
+    }
+    cur += c;
+    i += 1;
+  }
+  if (cur.trim() !== '') parts.push(cur);
+  if (quote !== null) return { parts: [command], opaque: true }; // 未闭合引号：整段一条
+  return { parts: parts, opaque: false };
+}
+
+// 终修：解释器执行旗标检测（命令位锚定）——解释器名须为段首词（splitCommands 已按
+// &&/||/;/|/换行切分，段首即命令位，&&/;/| 之后同此），杜绝 grep -n "node -e"
+// docs/readme.md、echo 句中提及 "node -e" 等非命令位字面误报。旗标按解释器类型匹配：
+//   bash/sh/zsh/dash：-[a-z]*c（短旗标组合，命中 -c / -cx / -xc / -lfc）；
+//   cmd：/c；powershell/pwsh：-Command | --command | -c；python/python3：-c；node：-e。
+function interpreterExecFlag(tokens) {
+  if (tokens.length === 0) return false;
+  const name = tokens[0].text.replace(/^\(+/, '').toLowerCase(); // 子壳 ( bash … )
+  const flags = tokens.slice(1);
+  if (name === 'bash' || name === 'sh' || name === 'zsh' || name === 'dash') {
+    return flags.some((t) => /^-[a-z]*c/.test(t.text));
+  }
+  if (name === 'cmd') {
+    return flags.some((t) => /^\/c$/i.test(t.text));
+  }
+  if (name === 'powershell' || name === 'pwsh') {
+    return flags.some((t) => /^(?:-command|--command|-c)$/i.test(t.text));
+  }
+  if (name === 'python' || name === 'python3') {
+    return flags.some((t) => /^-c$/.test(t.text));
+  }
+  if (name === 'node') {
+    return flags.some((t) => /^-e$/.test(t.text));
+  }
+  return false;
+}
+
 // v1.7.0 纯函数：识别 Bash 命令中的显式文件写入模式，返回目标路径数组（去重保序）。
 // 覆盖：重定向 > / >>（2> 忽略、/dev/null 归一保留）、tee（含 -a）、sed -i、
 // patch <f / git apply f；多命令（&&、||、;、|、换行分隔）逐一解析；引号路径兼容、
 // 反斜杠按字面字符（Windows 兼容）；无法确定目标的写入（$(...)、heredoc 等）返回 'opaque'。
+// 修复轮 P1-1：多命令切分改引号感知（splitCommands，未闭合引号→整段 opaque）；
+// 终修：解释器执行改命令位锚定（interpreterExecFlag，解释器名须为段首词）——
+// bash/sh/zsh/dash 短旗标组合 -[a-z]*c、cmd /c、powershell/pwsh -Command|--command|-c、
+// python -c、node -e → opaque（内层不二次解析，fail-closed 下仅影响日志细节）。
 function parseBashWriteTargets(command) {
   const targets = [];
   if (typeof command !== 'string' || command === '') return targets;
-  const segments = command.split(/&&|\|\||;|\||\r?\n/);
-  for (const rawSeg of segments) {
+  const split = splitCommands(command);
+  if (split.opaque) {
+    pushUnique(targets, BASH_WRITE_OPAQUE); // 修复轮 P1-1：未闭合引号，整段 opaque（安全侧）
+    return targets;
+  }
+  for (const rawSeg of split.parts) {
     const seg = rawSeg.trim();
     if (!seg) continue;
     const tokens = tokenizeBashSegment(seg);
+    if (interpreterExecFlag(tokens)) {
+      pushUnique(targets, BASH_WRITE_OPAQUE); // 终修：命令位解释器执行（-c/-e//c/-Command）→ opaque
+    }
     const input = scanSegmentWrites(seg, targets);
     scanCommandWrites(tokens, input, targets);
   }
@@ -711,7 +852,7 @@ async function main() {
     return 0;
   }
 
-  // ---- v1.7.0 Bash 写模式检测（补丁直改配套：堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
+  // ---- v1.7.0 Bash 写模式检测（修复轮2 fail-closed：写入痕迹一律过门禁链）----
   if (toolName === 'Bash') {
     const command = getBashCommand(payload);
     if (!command) {
@@ -726,23 +867,33 @@ async function main() {
       appendLog('PreToolUse', 'Bash', command.slice(0, 120), 'error', 'parse bash: ' + (e && e.message));
       return 0;
     }
-    if (targets.indexOf(BASH_WRITE_OPAQUE) !== -1) {
-      appendLog('PreToolUse', 'Bash', command.slice(0, 120), 'allow', 'bash-write-opaque');
-      return 0;
-    }
+    // 修复轮2（fail-closed）：非空目标集（含 opaque、含任何未能确证为安全的写入痕迹）
+    // → 完整门禁链（同 Write/Edit：白名单路径豁免→skip→变更单→approved spec→UI 门禁），
+    // 放行仅当门禁通过。显式目标走 gateFileWrite，opaque 走命令级 gateBashWriteCommand，
+    // 两者并存（heredoc 混合）逐一校验不短路；纯读/测试命令（无写入痕迹）照旧放行。
+    const hasOpaque = targets.indexOf(BASH_WRITE_OPAQUE) !== -1;
     for (const target of targets) {
+      if (target === BASH_WRITE_OPAQUE) continue; // opaque 由命令级门禁统一处理
       const normalized = String(target).replace(/\\/g, '/');
       if (normalized === '/dev/null') continue; // >/dev/null 豁免
       if (/\.(md|json)$/i.test(normalized)) continue; // .md/.json 文档豁免
       const rc = gateFileWrite(toolName, target);
       if (rc !== 0) return rc; // 任一目标命中 deny 即输出对应 deny JSON
     }
+    if (hasOpaque) {
+      const rc = gateBashWriteCommand(toolName, command);
+      if (rc !== 0) return rc; // opaque 写入痕迹未过门禁 → deny
+    }
     appendLog(
       'PreToolUse',
       'Bash',
       command.slice(0, 120),
       'allow',
-      targets.length > 0 ? 'bash write targets passed gate' : 'no explicit bash write target'
+      targets.length === 0
+        ? 'no explicit bash write target'
+        : hasOpaque
+          ? 'bash-write-gated:opaque'
+          : 'bash-write-gated'
     );
     return 0;
   }
@@ -833,6 +984,55 @@ function gateFileWrite(toolName, rawFile) {
 
   appendLog('PreToolUse', toolName, rawFile, 'deny', 'no approved spec');
   return deny(DENY_REASON);
+}
+
+// 修复轮2（fail-closed）命令级门禁：opaque 写入痕迹（heredoc / 嵌套解释器 -c/-e /
+// $(...) 目标不可知 / >& 文件名等）无法定位具体路径，白名单与 UI 门禁不适用，
+// 按 skip → approved 变更单 → approved spec → deny 链校验，放行仅当门禁通过。
+function gateBashWriteCommand(toolName, command) {
+  let projectRoot;
+  try {
+    projectRoot = findProjectRoot(path.join(process.cwd(), '__dev_sop_probe__'));
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to resolve project root: ' + (e && e.message) + '\n');
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'error', 'project root: ' + (e && e.message));
+    return 0;
+  }
+
+  if (hasSkipMarker(projectRoot)) {
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'allow', 'skip file present');
+    return 0;
+  }
+
+  // ---- 变更单解锁（v1.4.0 分级路由）：S/M 快速通道的 approved 变更单同级放行 ----
+  let approvedChangeNote = null;
+  try {
+    approvedChangeNote = findApprovedChangeNote(projectRoot);
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to check change notes: ' + (e && e.message) + '\n');
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'error', 'check change notes: ' + (e && e.message));
+    return 0;
+  }
+  if (approvedChangeNote) {
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'allow', 'approved change note found');
+    return 0;
+  }
+
+  let approved = false;
+  try {
+    approved = hasApprovedSpec(projectRoot);
+  } catch (e) {
+    process.stderr.write('[dev-sop] failed to check specs: ' + (e && e.message) + '\n');
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'error', 'check specs: ' + (e && e.message));
+    return 0;
+  }
+  if (approved) {
+    appendLog('PreToolUse', toolName, command.slice(0, 120), 'allow', 'approved spec found');
+    return 0;
+  }
+
+  appendLog('PreToolUse', toolName, command.slice(0, 120), 'deny', 'bash-write-gated:opaque');
+  return deny(BASH_WRITE_DENY_REASON);
 }
 
 // 直接运行时执行门禁；被 require（单测）时仅导出纯函数

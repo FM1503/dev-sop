@@ -43,7 +43,7 @@
 
 | 组件 | 作用 |
 | --- | --- |
-| `hooks/gate.js` | PreToolUse 门禁：无 approved spec（或 v1.4.0 approved 变更单 `docs/changes/*.md`）拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书/变更单路径拦截 Agent 委派；v1.5.0 起编码类委派还须引用执行书 `docs/tasks/<slug>-exec.md`（或变更单路径）或标 `exec-plan: exempt`（独立成行），否则拦截；验收类委派（review/ui/test-report 输出）自动豁免执行书（v1.5.1）；v1.7.0 起新增 Bash 写模式检测（`echo >`/`sed -i`/`tee`/`patch`/`git apply` 写代码文件同样过门禁，heredoc 等不可解析目标记 bash-write-opaque 放行留痕） |
+| `hooks/gate.js` | PreToolUse 门禁：无 approved spec（或 v1.4.0 approved 变更单 `docs/changes/*.md`）拦截文件写入，无 wireframe 批准拦截 UI 文件，未引用 spec/任务书/变更单路径拦截 Agent 委派；v1.5.0 起编码类委派还须引用执行书 `docs/tasks/<slug>-exec.md`（或变更单路径）或标 `exec-plan: exempt`（独立成行），否则拦截；验收类委派（review/ui/test-report 输出）自动豁免执行书（v1.5.1）；v1.7.0 起新增 Bash 写模式检测（`echo >`/`sed -i`/`tee`/`patch`/`git apply` 写代码文件同样过门禁，疑似写入（含无法解析目标）一律按完整文件门禁校验（fail-closed），放行仅当门禁通过） |
 | `hooks/inject.js` | UserPromptSubmit 注入：检测到开发意图时把流程纪律（v1.4.0 起十一条，含第 11 条分级路由；v1.5.0 第 5 条含勘探义务+执行书+豁免标记）注入上下文；同会话闩锁去重（首轮全文、次轮一行提醒，详见上文注入闩锁机制） |
 | `hooks/accept-check.js` | Stop 门禁：UI 任务必须产出 ui-report.json 且全部 error=0；代码任务必须产出 test-report.json 且全部 pass；`review: required` 任务必须产出 review-report.json 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）才能结束交付；v1.4.0 变更单（tier S/M）交付校验 `docs/changes/<slug>.review-report.json`（M 另加单条 test-report），连续 5 个 S 级附合并评估提醒 |
 | `hooks/ui-collect.js` | 浏览器内 eval 采集页面几何数据（多视口）为 JSON |

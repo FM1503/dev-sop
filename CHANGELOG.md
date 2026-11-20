@@ -5,7 +5,7 @@
 ### 新增
 
 - 补丁直改：确定性补丁脚本（PATCHES 四元组+前置/后置断言，失败 exit 1 打印 ±3 行上下文）替代 LLM Edit，worker 一条 Bash 原样执行执行命令，worker 段 <40s；`patch-mode: edit` 备选（定位行号+定向 Read 禁全文件读入+最短唯一锚点）
-- gate 新增 Bash 写模式检测：`echo >`/`sed -i`/`tee`/`patch`/`git apply` 写代码文件同样过门禁，堵 Bash 绕过洞；heredoc/`$(...)` 等不可解析目标记 bash-write-opaque 放行留痕（与 test-guard 同组双挂不互扰）
+- gate 新增 Bash 写模式检测：`echo >`/`sed -i`/`tee`/`patch`/`git apply` 写代码文件同样过门禁，堵 Bash 绕过洞；fail-closed：疑似写入即走门禁链，heredoc/`$(...)` 等无法解析目标按疑似写入一律过完整文件门禁校验、放行仅当门禁通过（与 test-guard 同组双挂不互扰）
 
 ## [1.6.0] - 2026-11-17
 

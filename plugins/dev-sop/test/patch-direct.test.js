@@ -5,10 +5,12 @@
 //   /dev/null 归一保留）、tee（含 -a）、sed -i、patch <f / git apply f；引号路径
 //   兼容；多命令（&&、;、| 分隔）逐一解析；反斜杠按字面字符（Windows 兼容）；
 //   无法确定目标（$(...) 替换、heredoc、patch 读 stdin 等）→ 'opaque' 标记项。
-//   main() Bash 分支 e2e（spawn 真实 gate.js）：无 spec 写代码文件 → deny（文案同
-//   Write/Edit）；写 .md → 放行；有 approved spec → 放行；heredoc → 放行且日志记
-//   bash-write-opaque。另含 hooks.json Bash 组双 hook 结构断言（与 test-guard 并存
-//   不互扰）与 test-guard 后台测试回归。
+//   main() Bash 分支 e2e（spawn 真实 gate.js，修复轮2 fail-closed）：无 spec 写代码
+//   文件 → deny（文案同 Write/Edit）；写 .md → 放行；有 approved spec → 放行；
+//   opaque 及一切疑似写入（heredoc / 嵌套解释器 / >& 文件名）→ 完整门禁链（无 spec
+//   → deny、日志 bash-write-gated；有 spec → 放行）；纯读命令照旧放行。另含
+//   hooks.json Bash 组双 hook 结构断言（与 test-guard 并存不互扰）与 test-guard
+//   后台测试回归。
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -41,7 +43,7 @@ test('parse：追加 >> 与混合 2>（stderr 忽略）', () => {
 test('parse：>/dev/null 归一保留（豁免在 gate 层判定）；反斜杠 /dev/null 同样归一', () => {
   assert.deepStrictEqual(parseBashWriteTargets('node x.js > /dev/null'), ['/dev/null']);
   assert.deepStrictEqual(parseBashWriteTargets('node x.js >/dev/null 2>&1'), ['/dev/null']);
-  assert.deepStrictEqual(parseBashWriteTargets('node x.js > NUL'), ['NUL']); // Windows NUL 不在豁免表
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js > NUL'), ['/dev/null']); // 修复轮 P2：NUL 豁免同 /dev/null
 });
 
 test('parse：tee 与 tee -a → 提取目标（含多文件）', () => {
@@ -110,6 +112,59 @@ test('parse：去重保序（同一目标多次出现只记一次）', () => {
   );
 });
 
+// ---- 修复轮 P1-1：引号感知命令切分（splitCommands）----
+
+test('parse（P1-1）：双引号内 && 不切分——echo "a && b" > src/a.js → 目标 src/a.js', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('echo "a && b" > src/a.js'), ['src/a.js']);
+});
+
+test("parse（P1-1）：单引号内 | 不切分——echo 'x|y' > src/b.js → 目标 src/b.js", () => {
+  assert.deepStrictEqual(parseBashWriteTargets("echo 'x|y' > src/b.js"), ['src/b.js']);
+});
+
+test('parse（P1-1）：未闭合引号 → 整段一条并标记 opaque（安全侧）', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('echo "a && b > src/a.js'), [BASH_WRITE_OPAQUE]);
+  assert.ok(parseBashWriteTargets("echo 'x > src/b.js").includes(BASH_WRITE_OPAQUE));
+});
+
+test('parse（P1-1）：引号内 ; 不切分——echo "a;b" > src/c.js → 目标 src/c.js', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('echo "a;b" > src/c.js'), ['src/c.js']);
+});
+
+test('parse（P1-1）：反斜杠转义分隔符（\\; \\|）不构成切分点', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('echo a\\;b > src/d.js'), ['src/d.js']);
+  assert.deepStrictEqual(parseBashWriteTargets('echo x\\|y > src/e.js'), ['src/e.js']);
+});
+
+// ---- 修复轮 P1-2：嵌套解释器（bash -c / sh -c / cmd /c）→ opaque ----
+
+test('parse（P1-2）：嵌套解释器 bash -c / sh -c / cmd /c（词边界）→ 追加 opaque', () => {
+  assert.deepStrictEqual(
+    parseBashWriteTargets('bash -c "echo x > src/a.js"'),
+    [BASH_WRITE_OPAQUE]
+  );
+  assert.ok(parseBashWriteTargets("sh -c 'sed -i s/a/b/ f.py'").includes(BASH_WRITE_OPAQUE));
+  assert.ok(parseBashWriteTargets('cmd /c "echo x > src/a.js"').includes(BASH_WRITE_OPAQUE));
+});
+
+test('parse（P1-2）：普通 bash/sh 调用不受影响（无 opaque、无目标）', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('bash build.sh && sh run.sh'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('bash --version'), []);
+});
+
+// ---- 修复轮 P2：>&2 / 2>&1 fd 复制忽略；NUL 豁免同 /dev/null ----
+
+test('parse（P2）：>&2 / 1>&2 fd 复制不标 opaque（stderr 重定向忽略）', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js >&2'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js 1>&2'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js > out.py 2>&1'), ['out.py']);
+});
+
+test('parse（P2）：>> NUL / 小写 nul 同样归一 /dev/null', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js >> NUL'), ['/dev/null']);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js > nul'), ['/dev/null']);
+});
+
 // ---- main() Bash 分支 e2e（spawn 真实 gate.js，喂 stdin JSON）----
 
 const GATE_JS = path.join(__dirname, '..', 'hooks', 'gate.js');
@@ -176,20 +231,25 @@ test('main() e2e：sed -i 写 src/a.py 无 spec → exit 2 deny', () => {
   assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('main() e2e：python heredoc → exit 0 放行且日志记 bash-write-opaque', () => {
+test('main() e2e（轮2 fail-closed）：python heredoc 无 spec → exit 2 deny 且日志记 bash-write-gated', () => {
   const dir = mkProject(false);
   const marker = 'patch-direct-opaque-' + Date.now() + '-' + process.pid;
   const command = "python - <<'PYEOF'\nprint('" + marker + "')\nPYEOF";
   const r = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: command } }, dir);
-  assert.strictEqual(r.status, 0);
-  assert.strictEqual(r.stdout.trim(), '');
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('检测到疑似文件写入的命令'),
+    'opaque 门禁 deny 须用 Bash 写检测专用文案，实际：' + out.hookSpecificOutput.permissionDecisionReason
+  );
   const logPath = path.join(os.homedir(), '.zcode', 'hooks', 'dev-sop.log');
   const logLines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/);
   const hit = logLines.filter((l) => l.includes(marker));
   assert.ok(hit.length > 0, '日志须含该命令记录');
   assert.ok(
-    hit.some((l) => l.includes('decision=allow') && l.includes('bash-write-opaque')),
-    'heredoc 放行日志须记 bash-write-opaque，实际：' + hit[hit.length - 1]
+    hit.some((l) => l.includes('decision=deny') && l.includes('bash-write-gated')),
+    'heredoc deny 日志须记 bash-write-gated，实际：' + hit[hit.length - 1]
   );
 });
 
@@ -203,6 +263,233 @@ test('main() e2e：>/dev/null 与普通只读命令 → exit 0 放行', () => {
   assert.strictEqual(r1.status, 0);
   const r2 = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: 'ls -la' } }, dir);
   assert.strictEqual(r2.status, 0);
+});
+
+// ---- 修复轮 e2e：P1-1 引号内 && 不再漏判；P1-2 嵌套解释器 opaque（轮2 起 fail-closed 过门禁）----
+
+test('main() e2e（P1-1）：echo "a && b" > src/a.js 无 spec → exit 2 deny（引号内 && 不再漏判目标）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'echo "a && b" > src/a.js' } },
+    dir
+  );
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('main() e2e（轮2 fail-closed）：bash -c "echo x > src/a.js" 无 spec → exit 2 deny（嵌套解释器 opaque 过门禁）', () => {
+  const dir = mkProject(false);
+  const r = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: 'bash -c "echo x > src/a.js"' } }, dir);
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('检测到疑似文件写入的命令'),
+    'opaque 门禁 deny 须用 Bash 写检测专用文案，实际：' + out.hookSpecificOutput.permissionDecisionReason
+  );
+});
+
+// ---- 修复轮2（fail-closed）：解析边角 + opaque 及一切疑似写入走完整门禁链 ----
+
+test('parse（轮2）：解释器枚举扩展（bash -x -c / node -e / python3 -c / pwsh -c）→ opaque', () => {
+  assert.ok(parseBashWriteTargets('bash -x -c "echo x > src/a.js"').includes(BASH_WRITE_OPAQUE));
+  assert.ok(
+    parseBashWriteTargets('node -e "fs.writeFileSync(\'src/a.js\', \'x\')"').includes(BASH_WRITE_OPAQUE)
+  );
+  assert.ok(parseBashWriteTargets('python3 -c "open(\'src/a.js\', \'w\')"').includes(BASH_WRITE_OPAQUE));
+  assert.ok(parseBashWriteTargets('pwsh -c "Set-Content src/a.js x"').includes(BASH_WRITE_OPAQUE));
+});
+
+test('parse（轮2）：>& 文件名（古式）→ opaque；>&2 / 2>&1 fd 复制仍忽略', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js >& out.log'), [BASH_WRITE_OPAQUE]);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js >&out.log'), [BASH_WRITE_OPAQUE]);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js >&2'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('node x.js 2>&1'), []);
+});
+
+test('parse（轮2）：heredoc 混合 cat > f <<EOF → 显式目标与 opaque 并存（不短路）', () => {
+  assert.deepStrictEqual(
+    parseBashWriteTargets('cat > src/a.js <<EOF\nhello\nEOF'),
+    ['src/a.js', BASH_WRITE_OPAQUE]
+  );
+});
+
+test('parse（轮2）：双引号内转义引号不切分，目标正常提取', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('echo "a\\"b && c" > src/a.js'), ['src/a.js']);
+});
+
+test('main() e2e（轮2）：echo "a\\"b && c" > src/a.js 无 spec → exit 2 deny（转义引号不漏判目标）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'echo "a\\"b && c" > src/a.js' } },
+    dir
+  );
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('main() e2e（轮2）：cat > src/a.js <<EOF 混合无 spec → exit 2 deny（显式目标+opaque 统一门禁不短路）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'cat > src/a.js <<EOF\nhello\nEOF' } },
+    dir
+  );
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('main() e2e（轮2）：bash -x -c "echo x > src/a.js" 无 spec → exit 2 deny 且日志记 bash-write-gated', () => {
+  const dir = mkProject(false);
+  const marker = 'patch-direct-r2-nested-' + Date.now() + '-' + process.pid;
+  const command = 'bash -x -c "echo ' + marker + ' > src/a.js"';
+  const r = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: command } }, dir);
+  assert.strictEqual(r.status, 2);
+  const logPath = path.join(os.homedir(), '.zcode', 'hooks', 'dev-sop.log');
+  const logLines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/);
+  const hit = logLines.filter((l) => l.includes(marker));
+  assert.ok(hit.length > 0, '日志须含该命令记录');
+  assert.ok(
+    hit.some((l) => l.includes('decision=deny') && l.includes('bash-write-gated')),
+    '嵌套解释器 deny 日志须记 bash-write-gated，实际：' + hit[hit.length - 1]
+  );
+});
+
+test('main() e2e（轮2）：node -e "fs.writeFileSync(...)" 无 spec → exit 2 deny', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'node -e "fs.writeFileSync(\'src/a.js\', \'x\')"' } },
+    dir
+  );
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('检测到疑似文件写入的命令'),
+    'opaque 门禁 deny 须用 Bash 写检测专用文案，实际：' + out.hookSpecificOutput.permissionDecisionReason
+  );
+});
+
+test('main() e2e（轮2）：>& out.log 无 spec → exit 2 deny（古式 >& 文件名标 opaque 过门禁）', () => {
+  const dir = mkProject(false);
+  const r = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: 'node x.js >& out.log' } }, dir);
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('main() e2e（轮2）：纯 pytest tests/ → exit 0 放行且日志不含 bash-write-gated', () => {
+  const dir = mkProject(false);
+  const marker = 'patch-direct-r2-pure-' + Date.now() + '-' + process.pid;
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'pytest tests/ && echo ' + marker } },
+    dir
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
+  const logPath = path.join(os.homedir(), '.zcode', 'hooks', 'dev-sop.log');
+  const logLines = fs.readFileSync(logPath, 'utf8').split(/\r?\n/);
+  const hit = logLines.filter((l) => l.includes(marker));
+  assert.ok(hit.length > 0, '日志须含该命令记录');
+  assert.ok(
+    hit.every((l) => l.includes('decision=allow') && !l.includes('bash-write-gated')),
+    '纯读命令日志不得含 bash-write-gated，实际：' + hit[hit.length - 1]
+  );
+});
+
+test('main() e2e（轮2）：grep x > /dev/null → exit 0 放行（/dev/null 豁免不受 fail-closed 影响）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'grep x input.txt > /dev/null' } },
+    dir
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
+});
+
+test('main() e2e（轮2）：有 approved spec 时上述写入全放行（含 opaque 与混合 heredoc）', () => {
+  const dir = mkProject(true);
+  const commands = [
+    'echo "a\\"b && c" > src/a.js',
+    'cat > src/a.js <<EOF\nhello\nEOF',
+    'bash -x -c "echo x > src/a.js"',
+    'node -e "fs.writeFileSync(\'src/a.js\', \'x\')"',
+    'node x.js >& out.log',
+  ];
+  for (const command of commands) {
+    const r = runHook(GATE_JS, { tool_name: 'Bash', tool_input: { command: command } }, dir);
+    assert.strictEqual(r.status, 0, '有 approved spec 须放行：' + command);
+    assert.strictEqual(r.stdout.trim(), '');
+  }
+});
+
+// ---- 终修：解释器执行旗标命令位锚定（interpreterExecFlag，杜绝非命令位字面误报）----
+
+test('parse（终修）：命令位解释器执行旗标 → opaque（bash -cx / powershell -Command / node -e / python -c / cmd /c）', () => {
+  assert.ok(
+    parseBashWriteTargets('bash -cx "echo x > src/a.js"').includes(BASH_WRITE_OPAQUE),
+    'bash -cx 短旗标组合须命中'
+  );
+  assert.ok(
+    parseBashWriteTargets('powershell -Command "Set-Content src/a.js x"').includes(BASH_WRITE_OPAQUE),
+    'powershell -Command 须命中'
+  );
+  assert.deepStrictEqual(parseBashWriteTargets("node -e 'code'"), [BASH_WRITE_OPAQUE]);
+  assert.deepStrictEqual(parseBashWriteTargets('python -c "print(1)"'), [BASH_WRITE_OPAQUE]);
+  assert.ok(parseBashWriteTargets('cmd /c "echo x > src/a.js"').includes(BASH_WRITE_OPAQUE));
+  assert.ok(parseBashWriteTargets('echo x | bash -c "y > src/a.js"').includes(BASH_WRITE_OPAQUE));
+});
+
+test('parse（终修）：非命令位提及解释器旗标不误报（grep 参数 / echo 句中 / git -m 引号内）', () => {
+  assert.deepStrictEqual(parseBashWriteTargets('grep -n "node -e" docs/readme.md'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('echo run node -e code here'), []);
+  assert.deepStrictEqual(parseBashWriteTargets('git commit -m "bash -c demo"'), []);
+});
+
+test('main() e2e（终修）：bash -cx "echo x > src/a.js" 无 spec → exit 2 deny（短旗标组合 gated）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'bash -cx "echo x > src/a.js"' } },
+    dir
+  );
+  assert.strictEqual(r.status, 2);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.ok(
+    out.hookSpecificOutput.permissionDecisionReason.includes('检测到疑似文件写入的命令'),
+    'deny 文案须含 Bash 写检测专用文案，实际：' + out.hookSpecificOutput.permissionDecisionReason
+  );
+});
+
+test('main() e2e（终修）：grep -n "node -e" docs/readme.md → exit 0 放行（命令位锚定不误报）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'grep -n "node -e" docs/readme.md' } },
+    dir
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
+});
+
+test('main() e2e（终修）：echo 句中提及 node -e → exit 0 放行', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    GATE_JS,
+    { tool_name: 'Bash', tool_input: { command: 'echo run node -e code here' } },
+    dir
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
 });
 
 // ---- hooks.json Bash matcher 组双 hook 结构（与 test-guard 并存不互扰）----
