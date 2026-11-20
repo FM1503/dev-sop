@@ -1,6 +1,6 @@
 {
   "name": "dev-sop",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Development SOP gate: clarifying interview, web research, approved spec and TDD before any code edit",
   "author": { "name": "AISkill" },
   "skills": "./skills",
