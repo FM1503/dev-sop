@@ -168,7 +168,7 @@ ui-files: src/ui/main.html, src/ui/style.css
 量化验收不再由主会话逐轮驱动，而是通过**单次 code-worker 委派合同**自动闭环。委派 prompt 必须包含以下全部七要素（缺一即合同不完整）：
 
 1. **任务书与规格路径**：委派 prompt 必须引用任务书与规格的 .md 路径（`docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`，满足 Agent 委派门禁）；本委派虽提及 .js/.mjs 等代码文件，但属**验收类委派**（输出 `docs/specs/<slug>.ui-report.json`）——gate 自动豁免执行书要求（v1.5.1），无需附执行书或豁免标记。
-2. **插件脚本路径**：委派前主会话必须解析插件实际安装目录并把可直接执行的**绝对路径**写入 prompt（如 `<安装目录>/hooks/ui-collect.js` 与 `<安装目录>/hooks/ui-analyzer.mjs`；安装目录可在设置→插件详情或 `~/.zcode/cli/plugins` 下确认）——Web 任务用 `<安装目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<安装目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<安装目录>/hooks/lvgl-check.mjs`（C 源码静态校验）；WPF 任务用 `<安装目录>/scripts/wpf-check.mjs`（静态 XAML 审查，报告同 ui-report 通用格式）。
+2. **插件脚本路径**：委派前主会话必须解析插件实际安装目录并把可直接执行的**绝对路径**写入 prompt（如 `<安装目录>/hooks/ui-collect.js` 与 `<安装目录>/hooks/ui-analyzer.mjs`；安装目录可在设置→插件详情或 `~/.zcode/cli/plugins` 下确认）——Web 任务用 `<安装目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<安装目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<安装目录>/hooks/lvgl-check.mjs`（C 源码静态校验）；WPF 任务用 `<安装目录>/scripts/wpf-check.mjs`（静态 XAML 审查，支持 --out 生成 ui-report 通用格式）。
 3. **双视口要求**：Web 任务至少采集两个视口——默认宽度 + 一个非默认宽度（如 375px 与 1280px，或项目约定组合）。
 4. **循环指令**："采集 → 分析 → 修复 → 复测，直至全部 error=0"——code-worker 在同一委派内自行迭代，主会话不逐轮参与。
 5. **预算硬限**：最多 5 轮修复、总时长 ≤10 分钟；超限立即停止并如实回报当前违规清单，禁止谎报清零。

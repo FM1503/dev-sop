@@ -18,7 +18,7 @@ const TEST_FEATURE_RE =
   /\b(test|spec|pytest|jest|vitest|mocha|karma|playwright|cypress|unittest|ctest|rspec)\b/i;
 
 // v1.9.0 混合栈规格 2.B：dotnet 系测试特征
-const DOTNET_TEST_RE = /\bdotnet\s+test\b/;
+const DOTNET_TEST_RE = /\bdotnet\s+test\b/i;
 const DOTNET_VSTEST_RE = /\bvstest(\.console)?\b/i;
 const DOTNET_MSTEST_RE = /\bmstest\b/i;
 
@@ -29,7 +29,7 @@ const DENY_REASON_DOTNET =
 
 const RUNNER_COMBINATION_RE = /\b(npm|npx|uv)\s+(run\s+)?\S*\btest/i;
 
-const WATCH_RE = /--watch[a-z]*($|=|\s)|nodemon|-w\s+\//i;
+const WATCH_RE = /--watch[a-z]*($|=|\s)|nodemon|-w\s+\/|\bdotnet\s+watch\b/i;
 
 function appendLog(event, tool, target, decision, reason) {
   try {
@@ -86,6 +86,8 @@ function isTestCommand(command) {
   if (typeof command !== 'string' || command === '') return false;
   // v1.9.0：vstest/mstest 单词不含 \btest\b（vstest 为整词），须单独命中特征正则
   if (DOTNET_VSTEST_RE.test(command) || DOTNET_MSTEST_RE.test(command)) return true;
+  // 修复轮 P1-2：dotnet watch 一律视为监听长跑（含无 test 词的 dotnet watch run 形态）
+  if (/\bdotnet\s+watch\b/i.test(command)) return true;
   if (TEST_FEATURE_RE.test(command)) {
     // 排除 cargo/go 等非测试词误报：单独处理
     if (/\b(cargo|go)\s+test\b/i.test(command)) return true;

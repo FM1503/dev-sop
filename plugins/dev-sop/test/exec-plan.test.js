@@ -621,3 +621,27 @@ test('v1.9.0 UI 门禁 e2e：写 src/a.xaml 且 spec 含独立行 wireframe: app
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ---- 修复轮 P2#③：UI_FILE_EXT_RE 精确 xaml（.xam 不再误判 UI）----
+
+test('v1.9.0 修复轮 UI 判据精确：approved spec（无 wireframe）下写 src/a.xam → exit 0 放行；src/a.xaml → 仍 deny', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-sop-xam-'));
+  try {
+    const specDir = path.join(root, 'docs', 'specs');
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, 'm.md'),
+      '---\nslug: m\nstatus: approved\n---\n# 规格\n',
+      'utf8'
+    );
+    const ok = runGateWrite(root, path.join(root, 'src', 'a.xam'));
+    assert.strictEqual(ok.status, 0, '修复后 .xam 非 UI 判据，approved spec 即放行，实际 stdout：' + ok.stdout);
+    assert.strictEqual(ok.stdout.trim(), '');
+    const bad = runGateWrite(root, path.join(root, 'src', 'a.xaml'));
+    assert.strictEqual(bad.status, 2, '.xaml 仍属 UI 判据，无 wireframe 须 deny');
+    const out = JSON.parse(bad.stdout.trim());
+    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes('wireframe: approved'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

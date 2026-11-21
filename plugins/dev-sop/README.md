@@ -49,7 +49,7 @@
 | `hooks/ui-collect.js` | 浏览器内 eval 采集页面几何数据（多视口）为 JSON |
 | `hooks/ui-analyzer.mjs` | 量化分析几何 JSON：越界/重叠/44px 点击区/对比度等，生成 ui-report.json |
 | `hooks/lvgl-check.mjs` | LVGL C 源码静态量化校验，生成同一格式的 ui-report.json |
-| `scripts/wpf-check.mjs` | WPF XAML 静态量化审查（v1.9.0）：Canvas 重叠/越界/资源引用缺失/低对比度/硬编码尺寸占比等 error+warning 规则，生成同一格式的 ui-report.json |
+| `scripts/wpf-check.mjs` | WPF XAML 静态量化审查（v1.9.0）：Canvas 重叠/越界/资源引用缺失/低对比度/硬编码尺寸占比等 error+warning 规则，支持 `--out` 生成 ui-report 通用格式 |
 | `hooks/test-guard.js` | PreToolUse on Bash 门禁：测试命令单条 ≤2 分钟、禁止后台/监听模式长跑（`references/testing-rules.md` 的强制执行器） |
 | `references/testing-rules.md` | 内置测试纪律：测试金字塔分层、耗时硬预算、fail-fast、受影响测试选择、反冗余 |
 | `references/stages-detail.md` | 七阶段完整实施细则（v1.2.0）：SKILL 正文只留流程骨架，各阶段细则逐节下沉于此，按需查阅 |
@@ -67,6 +67,7 @@
 - **`.dev-sop-skip`**：项目根创建该文件即临时跳过全部门禁；仅当用户明确要求时使用，事后删除恢复门禁。旧版标记文件 `.spec-gate-skip` / `.spec-gate-approve-longtest` 仍被钩子回退兼容（优先识别新名）。
 - **白名单路径**：`docs/specs/`、`docs/tasks/`、路径含 `test/tests/__tests__` 的文件、`*.test.*`、`*.spec.*`、`package.json`、`.gitignore`、`README.md` 无需 spec 即可写。
 - **fail-open**：钩子自身出错（如 stdin 解析失败）时放行并记日志，保证不因插件故障卡死开发。
+- **wpf-check 颜色边界**：十六进制色支持 3/4/6/8 位形态（`#RGB`/`#ARGB`/`#RRGGBB`/`#AARRGGBB`）；短色每位复制一位展开为全位后再计算亮度对比度。
 
 ## 可观测性
 

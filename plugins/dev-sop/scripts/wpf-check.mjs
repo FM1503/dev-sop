@@ -13,7 +13,7 @@ import path from 'node:path';
 const TAG_RE = /<(\/?)([\w:.\-]+)((?:[^<>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
 const ATTR_RE = /([\w:.\-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
 const RES_REF_RE = /\{\s*(?:StaticResource|DynamicResource)\s+([^}]+?)\s*\}/g;
-const HEX_RE = /^#([0-9a-fA-F]{8}|[0-9a-fA-F]{6})$/;
+const HEX_RE = /^#([0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})$/;
 
 function num(v) {
   if (typeof v !== 'string') return null;
@@ -81,10 +81,22 @@ function rectOf(el) {
   return { x, y, w, h };
 }
 
+// 修复轮 P2#④⑤（选实现 B：几何按 Canvas 定位、Margin 忽略）：Canvas.Left 与 Margin 并存时的混用帧注记
+function marginMixNote(el) {
+  if (el.attrs['Canvas.Left'] !== undefined && typeof el.attrs.Margin === 'string') {
+    return '；' + elLabel(el) + ' 元素同时具 Canvas.Left 与 Margin，几何按 Canvas 定位计算（Margin 偏移忽略）';
+  }
+  return '';
+}
+
 function hexToRgb(v) {
   const m = HEX_RE.exec(v.trim());
   if (!m) return null;
-  const s = m[1];
+  let s = m[1];
+  // 修复轮 P2#②：#RGB/#ARGB 短色每位 nibble 复制一位展开为全位后再算亮度
+  if (s.length === 3 || s.length === 4) {
+    s = s.split('').map((c) => c + c).join('');
+  }
   const hex = s.length === 8 ? s.slice(2) : s; // #AARRGGBB 取 RGB
   return [
     parseInt(hex.slice(0, 2), 16),
@@ -152,7 +164,8 @@ function checkFile(file, violations, state) {
               element: elLabel(rects[i].el),
               file,
               detail: '与 ' + elLabel(rects[j].el) + ' 在 Canvas 内矩形重叠 ' + (ow * oh) +
-                'px²（互不完整包含），建议改用 Grid/StackPanel 布局'
+                'px²（互不完整包含），建议改用 Grid/StackPanel 布局' +
+                marginMixNote(rects[i].el) + marginMixNote(rects[j].el)
             });
           }
         }
@@ -160,9 +173,13 @@ function checkFile(file, violations, state) {
     }
 
     // —— error ②：越界（父 Canvas 自身声明 Width/Height 时按其判定，否则按 Window 声明值；容差 1px）
-    const frameW = num(canvas.attrs.Width) ?? (win ? num(win.attrs.Width) : null);
-    const frameH = num(canvas.attrs.Height) ?? (win ? num(win.attrs.Height) : null);
-    const frameBy = num(canvas.attrs.Width) != null || num(canvas.attrs.Height) != null ? 'Canvas ' + elLabel(canvas) : (win ? 'Window ' + win.attrs.Width + 'x' + win.attrs.Height : null);
+    const canvasW = num(canvas.attrs.Width);
+    const canvasH = num(canvas.attrs.Height);
+    const frameW = canvasW ?? (win ? num(win.attrs.Width) : null);
+    const frameH = canvasH ?? (win ? num(win.attrs.Height) : null);
+    // 终修：几何帧逐维标注真实来源（该维取 Canvas 声明则 Canvas，否则取 Window 声明）
+    const srcW = canvasW != null ? 'Canvas' : 'Window';
+    const srcH = canvasH != null ? 'Canvas' : 'Window';
     if (!win && frameW == null && frameH == null) continue;
     for (const child of canvas.children) {
       const r = rectOf(child);
@@ -173,7 +190,8 @@ function checkFile(file, violations, state) {
           rule: 'out-of-bounds',
           element: elLabel(child),
           file,
-          detail: 'Canvas.Left+Width 右缘 ' + (r.x + r.w) + ' 超出 ' + frameBy + ' 声明宽 ' + frameW + '（容差 1px）'
+          detail: 'Canvas.Left+Width 右缘 ' + (r.x + r.w) + ' 超出 ' + srcW + ' 声明宽 ' + frameW + '（容差 1px）' +
+            marginMixNote(child)
         });
       }
       if (frameH != null && (r.y < 0 || r.y + r.h > frameH + 1)) {
@@ -182,7 +200,8 @@ function checkFile(file, violations, state) {
           rule: 'out-of-bounds',
           element: elLabel(child),
           file,
-          detail: 'Canvas.Top+Height 底缘 ' + (r.y + r.h) + ' 超出 ' + frameBy + ' 声明高 ' + frameH + '（容差 1px）'
+          detail: 'Canvas.Top+Height 底缘 ' + (r.y + r.h) + ' 超出 ' + srcH + ' 声明高 ' + frameH + '（容差 1px）' +
+            marginMixNote(child)
         });
       }
     }
@@ -315,8 +334,49 @@ function collectXaml(p, acc) {
   return acc;
 }
 
+// 解析命令行：非 - 开头的参数为输入文件；--out <path> 为可选输出路径（只作输出，不作为输入）
+function parseArgs() {
+  const argv = process.argv.slice(2);
+  const positional = [];
+  let out = null;
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--out') {
+      out = argv[i + 1] || null;
+      i++; // 跳过 --out 的值
+    } else if (argv[i] && !argv[i].startsWith('-')) {
+      positional.push(argv[i]);
+    }
+  }
+  return { files: positional, out };
+}
+
+// 写入报告文件：统一结构 {"reports":[...], "summary":{errors,warnings}}
+// 文件已存在且为数组结构则追加并重算 summary；首次创建则初始化结构。
+function writeReport(outPath, result) {
+  let report = null;
+  if (fs.existsSync(outPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(outPath, 'utf8'));
+      if (parsed && typeof parsed === 'object' && Array.isArray(parsed.reports)) {
+        report = parsed;
+      }
+    } catch (e) {
+      report = null;
+    }
+  }
+  if (!report) report = { reports: [], summary: { errors: 0, warnings: 0 } };
+  report.reports.push(result);
+  report.summary = {
+    errors: report.reports.reduce((s, r) => s + ((r && r.summary && Number(r.summary.errors)) || 0), 0),
+    warnings: report.reports.reduce((s, r) => s + ((r && r.summary && Number(r.summary.warnings)) || 0), 0)
+  };
+  fs.writeFileSync(outPath, JSON.stringify(report, null, 2) + '\n', 'utf8');
+}
+
 function main() {
-  const args = process.argv.slice(2);
+  const parsed = parseArgs();
+  const args = parsed.files;
+  const out = parsed.out;
   if (args.length === 0) {
     process.stderr.write('wpf-check: 用法 node wpf-check.mjs <.xaml 文件或目录> [more ...]\n');
     process.exit(1);
@@ -341,7 +401,16 @@ function main() {
     files: files.length,
     skippedContrast: state.skippedContrast
   };
-  process.stdout.write(JSON.stringify({ summary, violations }, null, 2) + '\n');
+  const result = { summary, violations };
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  if (out) {
+    try {
+      writeReport(out, result);
+    } catch (e) {
+      process.stderr.write('wpf-check: 写入报告文件失败 ' + out + '：' + e.message + '\n');
+      process.exit(1);
+    }
+  }
 }
 
 try {

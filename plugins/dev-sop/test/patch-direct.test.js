@@ -621,3 +621,44 @@ test('test-guard 回归：dotnet build（非测试命令）timeout 300000 → �
   assert.strictEqual(r.status, 0);
   assert.strictEqual(r.stdout.trim(), '');
 });
+
+// ---- 修复轮 P1-2/P2#①：dotnet watch 监听形态 deny 与 DOTNET_TEST_RE 大小写不敏感 ----
+
+test('test-guard 修复轮：dotnet watch test（监听+测试）→ deny（WATCH_RE dotnet watch 形态，文案不变）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet watch test', timeout: 300000 } },
+    dir
+  );
+  const reason = denyReasonOf(r);
+  assert.ok(!reason.includes('预算 5 分钟'), 'WATCH deny 沿用通用文案，实际：' + reason);
+});
+
+test('test-guard 修复轮：dotnet watch run（无 test 词的监听形态）→ deny', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet watch run --project App.csproj' } },
+    dir
+  );
+  denyReasonOf(r);
+});
+
+test('test-guard 修复轮 P2#①：Dotnet Test 大小写不敏感享 300s（250000 放行；400000 deny 含 dotnet 专用文案）', () => {
+  const dir = mkProject(false);
+  const ok = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'Dotnet Test --filter Add', timeout: 250000 } },
+    dir
+  );
+  assert.strictEqual(ok.status, 0, '大写形态命中 300000 预算须放行');
+  assert.strictEqual(ok.stdout.trim(), '');
+  const bad = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'DOTNET TEST', timeout: 400000 } },
+    dir
+  );
+  const reason = denyReasonOf(bad);
+  assert.ok(reason.includes('dotnet test 含构建，预算 5 分钟'), '须用 dotnet 专用文案，实际：' + reason);
+});

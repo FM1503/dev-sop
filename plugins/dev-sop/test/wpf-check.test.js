@@ -322,3 +322,135 @@ test('wpf-check：Window 无 SizeToContent 且 Min 均缺失 → window-sizing �
   );
   assert.strictEqual(hits(ok, 'window-sizing').length, 0);
 });
+
+// ---- 修复轮 P1-3：--out 聚合（与 lvgl-check/ui-analyzer 相同语义）----
+
+function cleanXaml() {
+  return doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <Canvas>
+    <Rectangle Canvas.Left="0" Canvas.Top="0" Width="20" Height="20"/>
+  </Canvas>`);
+}
+
+test('wpf-check 修复轮：--out 首次生成 {reports,summary} 聚合结构，summary 与本次 stdout 一致', () => {
+  const dir = tmpDir();
+  const p = path.join(dir, 't.xaml');
+  fs.writeFileSync(p, cleanXaml(), 'utf8');
+  const out = path.join(dir, 'ui-report.json');
+  const r = runWpf([p, '--out', out]);
+  assert.strictEqual(r.status, 0, 'stderr：' + r.stderr);
+  const stdout = JSON.parse(r.stdout);
+  const report = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.ok(Array.isArray(report.reports) && report.reports.length === 1, 'reports 数组须初始化且恰 1 条');
+  assert.deepStrictEqual(report.summary, {
+    errors: stdout.summary.errors,
+    warnings: stdout.summary.warnings
+  });
+  assert.strictEqual(report.reports[0].summary.warnings, stdout.summary.warnings, 'reports[0] 须为本次结果');
+});
+
+test('wpf-check 修复轮：--out 第二次运行追加进 reports 并重算 summary 合计；stdout 仍为本次结果且 --out 值不混入输入', () => {
+  const dir = tmpDir();
+  const p = path.join(dir, 't.xaml');
+  fs.writeFileSync(p, cleanXaml(), 'utf8');
+  const out = path.join(dir, 'ui-report.json');
+  const r1 = runWpf([p, '--out', out]);
+  assert.strictEqual(r1.status, 0, 'stderr：' + r1.stderr);
+  const first = JSON.parse(r1.stdout);
+  const r2 = runWpf([p, '--out', out]);
+  assert.strictEqual(r2.status, 0, 'stderr：' + r2.stderr);
+  const stdout = JSON.parse(r2.stdout);
+  assert.strictEqual(stdout.summary.files, 1, '--out 路径不得混入输入文件');
+  assert.deepStrictEqual(stdout.summary, first.summary, 'stdout 须照常输出本次结果，不受追加影响');
+  const report = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.strictEqual(report.reports.length, 2, '第二次须追加而非覆盖');
+  assert.strictEqual(report.summary.errors, stdout.summary.errors * 2, 'summary.errors 须重算合计');
+  assert.strictEqual(report.summary.warnings, stdout.summary.warnings * 2, 'summary.warnings 须重算合计');
+});
+
+// ---- 修复轮 P2#②：#RGB/#ARGB 短色展开为全位后再算亮度 ----
+
+test('wpf-check 修复轮：短色对比度（#F00 on #0F0 命中；#F777 on #F888 命中；#F00 on #000 比值≈5.25 不命中）', () => {
+  const hitA = runXaml(
+    doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <StackPanel>
+    <TextBlock Foreground="#F00" Background="#0F0" Text="红配绿"/>
+  </StackPanel>`)
+  );
+  const va = hits(hitA, 'low-contrast');
+  assert.strictEqual(va.length, 1, '3 位短色展开 FF0000 vs 00FF00 比值≈2.91 须命中');
+  assert.ok(parseFloat(va[0].detail.match(/对比度 ([\d.]+)/)[1]) < 4.5, 'detail 须给出实测比值');
+  const hitB = runXaml(
+    doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <StackPanel>
+    <TextBlock Foreground="#F777" Background="#F888" Text="ARGB 短色灰"/>
+  </StackPanel>`)
+  );
+  assert.strictEqual(hits(hitB, 'low-contrast').length, 1, '4 位 #ARGB 展开为 FF777777 vs FF888888 须命中');
+  const miss = runXaml(
+    doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <StackPanel>
+    <TextBlock Foreground="#F00" Background="#000" Text="红黑"/>
+  </StackPanel>`)
+  );
+  assert.strictEqual(hits(miss, 'low-contrast').length, 0, 'FF0000 vs 000000 比值≈5.25 ≥ 4.5，按 WCAG 不命中');
+});
+
+// ---- 修复轮 P2#④⑤（选实现 B：几何按 Canvas 定位，Margin 忽略并 detail 注明）----
+
+test('wpf-check 修复轮：Canvas.Left+Margin 混用帧 → detail 注明几何按 Canvas 定位计算（Margin 偏移忽略）且 Margin 不计入越界判定', () => {
+  const overlap = runXaml(
+    doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <Canvas>
+    <Rectangle Canvas.Left="0" Canvas.Top="0" Width="100" Height="100"/>
+    <Rectangle Canvas.Left="50" Canvas.Top="20" Width="100" Height="100" Margin="30,30,0,0"/>
+  </Canvas>`)
+  );
+  const v = hits(overlap, 'canvas-overlap');
+  assert.strictEqual(v.length, 1);
+  assert.ok(
+    v[0].detail.includes('同时具 Canvas.Left 与 Margin，几何按 Canvas 定位计算'),
+    'detail 须含混用帧注记，实际：' + v[0].detail
+  );
+  assert.ok(v[0].detail.includes('Margin 偏移忽略'), 'detail 须注明忽略 Margin，实际：' + v[0].detail);
+  const inside = runXaml(
+    doc('Width="200" Height="100" MinWidth="100" MinHeight="50"', `
+  <Canvas>
+    <Rectangle Canvas.Left="150" Canvas.Top="10" Width="40" Height="20" Margin="200,200,0,0"/>
+  </Canvas>`)
+  );
+  assert.strictEqual(
+    hits(inside, 'out-of-bounds').length,
+    0,
+    '右缘按 Canvas 计 190 ≤ 201 界内；若把 Margin 计入几何才会误报'
+  );
+});
+
+// ---- 终修：几何帧逐维标注真实来源（单维 Canvas + 单维 Window 混合帧）----
+
+test('wpf-check 终修：Canvas 仅声明 Height、Window 声明 Width 混合帧 → 宽越界 detail 标 Window 来源恰一次、高越界 detail 标 Canvas 来源恰一次，不重复', () => {
+  const result = runXaml(
+    doc('Width="800" Height="600" MinWidth="100" MinHeight="50"', `
+  <Canvas Height="100">
+    <Button Canvas.Left="780" Canvas.Top="90" Width="40" Height="20" Content="x"/>
+  </Canvas>`)
+  );
+  const v = hits(result, 'out-of-bounds');
+  assert.strictEqual(v.length, 2, '右缘 820 > 800+1（Window 宽帧）且底缘 110 > 100+1（Canvas 高帧）→ 命中 2 条');
+  const wv = v.find((x) => x.detail.includes('声明宽'));
+  const hv = v.find((x) => x.detail.includes('声明高'));
+  assert.ok(wv, '应存在宽越界条目，实际 violations：' + JSON.stringify(v.map((x) => x.detail)));
+  assert.ok(hv, '应存在高越界条目，实际 violations：' + JSON.stringify(v.map((x) => x.detail)));
+  assert.strictEqual(
+    wv.detail.split('Window 声明宽 800').length - 1,
+    1,
+    '宽越界 detail 须含 "Window 声明宽 800" 恰一次，实际：' + wv.detail
+  );
+  assert.ok(!wv.detail.includes('Canvas 声明宽'), '宽越界 detail 不得误标 Canvas 来源，实际：' + wv.detail);
+  assert.strictEqual(
+    hv.detail.split('Canvas 声明高 100').length - 1,
+    1,
+    '高越界 detail 须含 "Canvas 声明高 100" 恰一次，实际：' + hv.detail
+  );
+  assert.ok(!hv.detail.includes('Window 声明高'), '高越界 detail 不得误标 Window 来源，实际：' + hv.detail);
+});
