@@ -17,6 +17,16 @@ const DENY_REASON =
 const TEST_FEATURE_RE =
   /\b(test|spec|pytest|jest|vitest|mocha|karma|playwright|cypress|unittest|ctest|rspec)\b/i;
 
+// v1.9.0 混合栈规格 2.B：dotnet 系测试特征
+const DOTNET_TEST_RE = /\bdotnet\s+test\b/;
+const DOTNET_VSTEST_RE = /\bvstest(\.console)?\b/i;
+const DOTNET_MSTEST_RE = /\bmstest\b/i;
+
+// dotnet test 含 restore+build（首跑慢）：预算单独放宽至 5 分钟；其余测试命令仍 120000ms。
+const DOTNET_TIMEOUT_MS = 300000;
+const DENY_REASON_DOTNET =
+  DENY_REASON + ' dotnet test 含构建，预算 5 分钟（超时上限 300000ms）。';
+
 const RUNNER_COMBINATION_RE = /\b(npm|npx|uv)\s+(run\s+)?\S*\btest/i;
 
 const WATCH_RE = /--watch[a-z]*($|=|\s)|nodemon|-w\s+\//i;
@@ -74,6 +84,8 @@ function findProjectRoot(probeFile) {
 
 function isTestCommand(command) {
   if (typeof command !== 'string' || command === '') return false;
+  // v1.9.0：vstest/mstest 单词不含 \btest\b（vstest 为整词），须单独命中特征正则
+  if (DOTNET_VSTEST_RE.test(command) || DOTNET_MSTEST_RE.test(command)) return true;
   if (TEST_FEATURE_RE.test(command)) {
     // 排除 cargo/go 等非测试词误报：单独处理
     if (/\b(cargo|go)\s+test\b/i.test(command)) return true;
@@ -171,9 +183,12 @@ async function main() {
     appendLog('PreToolUse-Bash', toolName, target, 'deny', 'test command in watch mode');
     return deny(DENY_REASON);
   }
-  if (timeout !== null && timeout > 120000) {
-    appendLog('PreToolUse-Bash', toolName, target, 'deny', 'test command timeout ' + timeout + 'ms > 120000ms');
-    return deny(DENY_REASON);
+  // v1.9.0 混合栈规格 2.B：dotnet test 预算放宽至 DOTNET_TIMEOUT_MS，其余维持 120000ms
+  const isDotnetTest = DOTNET_TEST_RE.test(command);
+  const budgetMs = isDotnetTest ? DOTNET_TIMEOUT_MS : 120000;
+  if (timeout !== null && timeout > budgetMs) {
+    appendLog('PreToolUse-Bash', toolName, target, 'deny', 'test command timeout ' + timeout + 'ms > ' + budgetMs + 'ms');
+    return deny(isDotnetTest ? DENY_REASON_DOTNET : DENY_REASON);
   }
 
   appendLog('PreToolUse-Bash', toolName, target, 'allow', 'test command within budget');

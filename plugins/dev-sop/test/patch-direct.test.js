@@ -526,3 +526,98 @@ test('双挂不互扰：test-guard 拦后台测试（exit 2），gate 对同命�
   );
   assert.strictEqual(r2.status, 0, 'gate 对非写入命令放行，不重复 test-guard 职责');
 });
+
+// ---- v1.9.0 混合栈规格 2.B：test-guard dotnet 测试预算扩展（dotnet test/vstest/mstest）----
+
+function denyReasonOf(r) {
+  assert.strictEqual(r.status, 2, '须 deny（exit 2），实际 stdout：' + r.stdout);
+  const out = JSON.parse(r.stdout.trim());
+  assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+  return out.hookSpecificOutput.permissionDecisionReason;
+}
+
+test('test-guard dotnet：dotnet test 后台运行 → deny（background 禁令同样适用）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet test', run_in_background: true } },
+    dir
+  );
+  denyReasonOf(r);
+});
+
+test('test-guard dotnet：dotnet test timeout 400000 → deny 且文案含"dotnet test 含构建，预算 5 分钟"', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet test --filter Add', timeout: 400000 } },
+    dir
+  );
+  const reason = denyReasonOf(r);
+  assert.ok(reason.includes('dotnet test 含构建，预算 5 分钟'), 'deny 文案须含 dotnet 专用预算说明，实际：' + reason);
+});
+
+test('test-guard dotnet：dotnet test timeout 300000（上限内）→ exit 0 放行', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet test', timeout: 300000 } },
+    dir
+  );
+  assert.strictEqual(r.status, 0, '300000ms ≤ DOTNET_TIMEOUT_MS 须放行');
+  assert.strictEqual(r.stdout.trim(), '');
+});
+
+test('test-guard dotnet：dotnet test timeout 150000（超通用预算、在 dotnet 预算内）→ 放行', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet test -c Release', timeout: 150000 } },
+    dir
+  );
+  assert.strictEqual(r.status, 0, '放宽区间 (120000, 300000] 内须放行');
+  assert.strictEqual(r.stdout.trim(), '');
+});
+
+test('test-guard dotnet：dotnet vstest 特征命中，预算仍按通用 120000（timeout 200000 → deny）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet vstest Tests.dll', timeout: 200000 } },
+    dir
+  );
+  const reason = denyReasonOf(r);
+  assert.ok(!reason.includes('预算 5 分钟'), 'vstest 非 dotnet test，须用通用文案，实际：' + reason);
+});
+
+test('test-guard dotnet：mstest 特征命中（无 test 整词仍识别为测试），timeout 200000 → deny', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'mstest /testcontainer:bin/x.dll', timeout: 200000 } },
+    dir
+  );
+  denyReasonOf(r);
+});
+
+test('test-guard 回归：pytest timeout 200000 仍按 120000 deny（既有特征与预算不变）', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'pytest tests/', timeout: 200000 } },
+    dir
+  );
+  const reason = denyReasonOf(r);
+  assert.ok(!reason.includes('预算 5 分钟'), '非 dotnet 命令不得出现 dotnet 专用文案，实际：' + reason);
+});
+
+test('test-guard 回归：dotnet build（非测试命令）timeout 300000 → 放行，不受 dotnet 扩展影响', () => {
+  const dir = mkProject(false);
+  const r = runHook(
+    TEST_GUARD_JS,
+    { tool_name: 'Bash', tool_input: { command: 'dotnet build Services.csproj', timeout: 300000 } },
+    dir
+  );
+  assert.strictEqual(r.status, 0);
+  assert.strictEqual(r.stdout.trim(), '');
+});

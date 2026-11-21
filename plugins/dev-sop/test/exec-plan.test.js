@@ -571,3 +571,53 @@ test('prospector 不影响普通委派：code-worker 附执行书引用 → 照�
   const out = JSON.parse(bad.stdout.trim());
   assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes('编码委派必须附执行书'));
 });
+
+// ---- v1.9.0：gate UI 判据补 .xaml（Write 门禁 e2e，规格 2.C / 验收 checklist 第 3 项）----
+
+const fs = require('node:fs');
+const os = require('node:os');
+
+// e2e：真实 gate.js + Write 工具（ZCODE_PROJECT_DIR 指向临时项目根）
+function runGateWrite(projectRoot, filePath) {
+  return spawnSync(process.execPath, [GATE_JS], {
+    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: filePath } }),
+    cwd: PLUGIN_DIR,
+    env: Object.assign({}, process.env, { ZCODE_PROJECT_DIR: projectRoot }),
+    timeout: 20000,
+    encoding: 'utf8',
+  });
+}
+
+test('v1.9.0 UI 门禁 e2e：写 src/a.xaml 无 wireframe 批准 spec → exit 2 deny（.xaml 属 UI 判据）', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-sop-xaml-'));
+  try {
+    const r = runGateWrite(root, path.join(root, 'src', 'a.xaml'));
+    assert.strictEqual(r.status, 2);
+    const out = JSON.parse(r.stdout.trim());
+    assert.strictEqual(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(
+      out.hookSpecificOutput.permissionDecisionReason.includes('wireframe: approved'),
+      'deny reason 须含 wireframe: approved 解锁要求原文'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('v1.9.0 UI 门禁 e2e：写 src/a.xaml 且 spec 含独立行 wireframe: approved → exit 0 放行', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dev-sop-xaml-'));
+  try {
+    const specDir = path.join(root, 'docs', 'specs');
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(specDir, 'mixed.md'),
+      '---\nslug: mixed\nstatus: approved\nwireframe: approved\n---\n# 规格\n',
+      'utf8'
+    );
+    const r = runGateWrite(root, path.join(root, 'src', 'a.xaml'));
+    assert.strictEqual(r.status, 0);
+    assert.strictEqual(r.stdout.trim(), ''); // 放行时不产生 deny JSON
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

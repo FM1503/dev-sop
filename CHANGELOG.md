@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.9.0] - 2026-11-21
+
+### 新增
+
+- `scripts/wpf-check.mjs` 静态 XAML 审查：重叠/越界/资源引用缺失（error）、低对比度/硬编码尺寸占比等（warning）规则，纯 Node 零依赖，输出与 lvgl-check 同构 JSON
+- dotnet test 预算门禁（`hooks/test-guard.js`）：dotnet test/vstest/mstest 测试特征识别；dotnet test 含构建，预算阈值单独放宽至 5 分钟（300000ms）专项，后台/监听仍禁
+- mixed-stack 模板（`references/spec-templates/mixed-stack.md`）与 `docs/architecture.md` 项目约定：C# 服务层/WPF 表现层/LVGL 固件层三层清单、跨层数据流表、各层验收清单与五列测试计划表
+- 阶段 0.7 跨层缺陷定位 SOP（stages-detail 第 1.4 节）：读 architecture.md→按现象定层（wpf-check/lvgl-check/dotnet test）→按 tier 路由修复→改任一层必跑相邻层验收命令
+- `gate.js` UI 判据补 `.xaml`：写 .xaml 需 spec `wireframe: approved`
+
 ## [1.8.0] - 2026-11-20
 
 ### 新增

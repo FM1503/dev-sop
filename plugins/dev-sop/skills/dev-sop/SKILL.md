@@ -25,7 +25,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 ### 阶段 0：触发判断与分级路由（v1.4.0）
 
-收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。**断点续作**：随时 `node scripts/flow-status.mjs` 查各 slug 的阶段/已有产物/缺失产物/下一步（inject 状态判定与 accept-check 门禁谓词保持一致，有跨一致性测试锁定）。
+收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。**断点续作**：随时 `node scripts/flow-status.mjs` 查各 slug 的阶段/已有产物/缺失产物/下一步（inject 状态判定与 accept-check 门禁谓词保持一致，有跨一致性测试锁定）。缺陷修复类需求先走阶段 0.7 缺陷定位（见 stages-detail）。
 
 ### 阶段 1：需求澄清访谈（调研与访谈并行）
 

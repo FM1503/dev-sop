@@ -66,6 +66,15 @@
 
 门禁联动：M 级交付时 `hooks/accept-check.js` 同时校验 review-report（verdict 合规）与 test-report（单条全 pass）。S/M 修复循环与并行约束沿用 L 级（第 8 节）。
 
+### 1.4 阶段 0.7 缺陷定位（v1.9.0 混合栈跨层缺陷 SOP）
+
+**触发**：缺陷修复类需求涉及 C# 服务层 / WPF 表现层 / LVGL 固件层混合栈（spec 模板 `references/spec-templates/mixed-stack.md`）；输入为现象描述，定位完成后按 1.1 进入分级路由。四步：
+
+1. **读架构**：先读项目根 `docs/architecture.md`（层清单与每层定位工具指引，spec/缺陷排查必读约定；**无则先请用户确认生成一次**再继续）。
+2. **按现象定层**：视觉错乱 → WPF 层跑 `scripts/wpf-check.mjs`（.xaml）/ LVGL 层跑 `hooks/lvgl-check.mjs`（.c）；数据错 → C# 层跑 `dotnet test`；显示与数据不一致 → 查 spec 的"跨层数据流"表定位断点层。
+3. **层内定位后按 tier 路由修复**：进入对应级别（S / M / L）的修复流程（按 1.1 路由表判据定级）。
+4. **跨层回归**：修复后改任一层必须跑相邻层的验收命令（C# ↔ WPF ↔ LVGL），防止"修一层坏一层"。
+
 ## 第 2 节：阶段 1 需求澄清访谈
 
 **不许臆测任何未确认的需求。** 凡是用户没有明确说过的，都必须问。
@@ -112,7 +121,7 @@ review: required
 
 - `code-files: <逗号分隔的项目相对路径>`：声明本次任务的目标代码文件（如 `code-files: src/app.js, src/utils.js`）。**批准前必填**：`status` 改为 `approved` 后，若既未声明 `code-files` 也未声明 `ui-files`，Stop 钩子（`hooks/accept-check.js`）会拦截交付并要求补声明。纯文档/调研任务显式写 `code-files: none`（值不区分大小写，视为已声明但无代码产出，跳过 test-report 要求）。声明代码文件后，若这些文件已实现，Stop 钩子会强制校验 `docs/specs/<slug>.test-report.json`（验收测试报告，见第 7 节）。
 
-**模板选用（v1.3.0 起强制）**：写规格前，按任务类型从 dev-sop 插件安装目录 `references/spec-templates/` **复制对应骨架模板**到 `docs/specs/<slug>.md` 再填充——CLI / 脚本类用 `cli-tool.md`，Web 界面类用 `web-ui.md`，LVGL 嵌入式界面类用 `lvgl.md`。模板已内置 frontmatter 字段、章节骨架、五列测试计划表头（web-ui 另含 UI 数据表与 ASCII 线框占位，lvgl 含屏幕规格与布局策略占位），**禁止现编 spec 结构**；模板未覆盖的内容在对应章节内追加，不另立章节结构。
+**模板选用（v1.3.0 起强制）**：写规格前，按任务类型从 dev-sop 插件安装目录 `references/spec-templates/` **复制对应骨架模板**到 `docs/specs/<slug>.md` 再填充——CLI / 脚本类用 `cli-tool.md`，Web 界面类用 `web-ui.md`，LVGL 嵌入式界面类用 `lvgl.md`，C#/WPF/LVGL 混合栈类用 `mixed-stack.md`。模板已内置 frontmatter 字段、章节骨架、五列测试计划表头（web-ui 另含 UI 数据表与 ASCII 线框占位，lvgl 含屏幕规格与布局策略占位），**禁止现编 spec 结构**；模板未覆盖的内容在对应章节内追加，不另立章节结构。
 
 正文必须包含：
 
@@ -159,7 +168,7 @@ ui-files: src/ui/main.html, src/ui/style.css
 量化验收不再由主会话逐轮驱动，而是通过**单次 code-worker 委派合同**自动闭环。委派 prompt 必须包含以下全部七要素（缺一即合同不完整）：
 
 1. **任务书与规格路径**：委派 prompt 必须引用任务书与规格的 .md 路径（`docs/tasks/<slug>.md` 与 `docs/specs/<slug>.md`，满足 Agent 委派门禁）；本委派虽提及 .js/.mjs 等代码文件，但属**验收类委派**（输出 `docs/specs/<slug>.ui-report.json`）——gate 自动豁免执行书要求（v1.5.1），无需附执行书或豁免标记。
-2. **插件脚本路径**：委派前主会话必须解析插件实际安装目录并把可直接执行的**绝对路径**写入 prompt（如 `<安装目录>/hooks/ui-collect.js` 与 `<安装目录>/hooks/ui-analyzer.mjs`；安装目录可在设置→插件详情或 `~/.zcode/cli/plugins` 下确认）——Web 任务用 `<安装目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<安装目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<安装目录>/hooks/lvgl-check.mjs`（C 源码静态校验）。
+2. **插件脚本路径**：委派前主会话必须解析插件实际安装目录并把可直接执行的**绝对路径**写入 prompt（如 `<安装目录>/hooks/ui-collect.js` 与 `<安装目录>/hooks/ui-analyzer.mjs`；安装目录可在设置→插件详情或 `~/.zcode/cli/plugins` 下确认）——Web 任务用 `<安装目录>/hooks/ui-collect.js`（浏览器内 eval 采集几何 JSON）与 `<安装目录>/hooks/ui-analyzer.mjs`（量化分析）；LVGL 任务用 `<安装目录>/hooks/lvgl-check.mjs`（C 源码静态校验）；WPF 任务用 `<安装目录>/scripts/wpf-check.mjs`（静态 XAML 审查，报告同 ui-report 通用格式）。
 3. **双视口要求**：Web 任务至少采集两个视口——默认宽度 + 一个非默认宽度（如 375px 与 1280px，或项目约定组合）。
 4. **循环指令**："采集 → 分析 → 修复 → 复测，直至全部 error=0"——code-worker 在同一委派内自行迭代，主会话不逐轮参与。
 5. **预算硬限**：最多 5 轮修复、总时长 ≤10 分钟；超限立即停止并如实回报当前违规清单，禁止谎报清零。
@@ -205,6 +214,8 @@ spec 获批后，不要直接向 code-worker 委派编码。**必须先产出任
 1. **主会话亲自勘探（或 prospector 并行代勘）**：用 Read / Grep 亲自查看目标文件现状（不凭记忆），复制准确的现有文本片段作为 old 锚点；可先委派 prospector（类型名含 prospector，委派 prompt 首行 `PROSPECTOR-READONLY`，gate 双条件放行）并行取锚点表（见 `agents/prospector.md`），主会话基于表填变更表并裁决——裁决与 old 转录始终在主会话。
 2. **产出变更表（v1.8.0 表格驱动，手写执行书退役）**：按 `references/spec-templates/change-lite.md` 的"变更表"填表——列：序号 / 文件 / 行号（旧块首行，1 基）/ 锚点（该行应含短子串）/ 旧行数 / 新内容（多行 `<NL>` 转义，新文件 `<NEWFILE>` 前缀全文），另含 `## expect_after`（文件 / 包含子串）与 `## 验证` 字段；执行书不再手写——`docs/tasks/<slug>-exec.md` 为 `node scripts/compile-change.mjs <变更单>` 的编译产物（补丁脚本 / 执行命令 / 自动回滚快照生成，锚点零转录）。
 3. **并入委派（单轮三步，v1.8.0 编译直改）**：变更表全文写入委派 prompt 并写明变更单落盘路径（`docs/changes/<slug>.md` 引用同时满足 Agent 委派门禁与执行书门禁），code-worker 同一轮完成 ①落盘变更单（逐字写入）②`node scripts/compile-change.mjs docs/changes/<slug>.md | python -`（执行书=编译产物 docs/tasks/<slug>-exec.md，一条管道机械应用）③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮）；**编译失败（exit 非零）fallback `patch-mode: edit`**（定位行号+最短唯一锚点+定向 Read 禁全文件读入）；S 级同样把变更表直接写入变更单并随 prompt 附变更单路径。
+
+**UI 判据说明（v1.9.0）**：`.xaml` 属 UI 文件判据——`hooks/gate.js` 的 `UI_FILE_EXT_RE` 含 xaml，与 .html/.css/.vue/.jsx/.tsx 同类；执行书/变更单涉及 .xaml 写入时，仍受 Write/Edit 层 UI 门禁约束（spec frontmatter 须有 `wireframe: approved`）。
 
 **文本级精确约束（硬性）**：
 

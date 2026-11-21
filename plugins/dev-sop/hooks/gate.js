@@ -210,7 +210,7 @@ function findApprovedChangeNote(projectRoot) {
   });
 }
 
-const UI_FILE_EXT_RE = /\.(html?|css|scss|vue|jsx|tsx)$/i;
+const UI_FILE_EXT_RE = /\.(html?|css|scss|vue|jsx|tsx|xaml?)$/i;
 
 function isUiFilePath(p) {
   const normalized = String(p).replace(/\\/g, '/');
