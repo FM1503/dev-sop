@@ -87,9 +87,8 @@
     padding: 2px 6px;
   }
   .stage .gate.key { background: rgba(224, 175, 104, 0.15); color: var(--key); }
-  /* 五把钥匙 */
-  .keys { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
-  @media (max-width: 900px) { .keys { grid-template-columns: repeat(2, 1fr); } }
+  /* 七把钥匙 */
+  .keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
   @media (max-width: 700px) { .keys { grid-template-columns: 1fr; } }
   .keycard {
     background: var(--card);
@@ -104,6 +103,29 @@
     margin-bottom: 6px;
   }
   .keycard p { font-size: 0.9rem; }
+  /* 审查与交付卡片 */
+  .review-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 900px) { .review-grid { grid-template-columns: 1fr; } }
+  .reviewcard {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .reviewcard .rc-title { color: var(--accent); font-weight: 700; font-size: 0.95rem; margin-bottom: 8px; }
+  .reviewcard p { font-size: 0.9rem; }
+  .reviewcard code { font-family: Consolas, monospace; color: var(--accent); }
+  .reviewcard ul { list-style: none; font-size: 0.9rem; }
+  .reviewcard li { margin-bottom: 6px; }
+  .reviewcard .tier {
+    display: inline-block;
+    font-family: Consolas, monospace;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-right: 4px;
+  }
   /* 组件表 */
   table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 10px; overflow: hidden; }
   th, td { padding: 10px 12px; text-align: left; font-size: 0.9rem; border-bottom: 1px solid var(--card-border); }
@@ -196,7 +218,27 @@
     </li>
   </ol>
 
-  <h2>五把硬钥匙</h2>
+  <h2>审查与交付（v1.10 提速）</h2>
+  <div class="review-grid">
+    <div class="reviewcard">
+      <div class="rc-title">① review-lint 机器预检 · 独立硬门禁</div>
+      <p>实现完成后先跑 <code>review-lint</code> 机器预检，产物 <code>&lt;slug&gt;.lint-report.json</code> 的 violations <strong>未清零不放行</strong>；这是独立硬门禁，用户 accept 标记也<strong>不豁免</strong>机器项。</p>
+    </div>
+    <div class="reviewcard">
+      <div class="rc-title">② 分级审查 · 按风险决定力度</div>
+      <ul>
+        <li><span class="tier">S 级</span>：lint 干净即结案（免 AI 审，lite-reviewed-by-lint）</li>
+        <li><span class="tier">M 级</span>：diff-only 快审（<strong>不复跑测试</strong>，工具预算 ≤10，fast-review）</li>
+        <li><span class="tier">L 级</span>：全审（六维流程，full-review）</li>
+      </ul>
+    </div>
+    <div class="reviewcard">
+      <div class="rc-title">③ 用户验收标记</div>
+      <p>用户在 <code>docs/specs/&lt;slug&gt;-accept.md</code>（变更单可放 <code>docs/changes/</code>）落标记即可结案（user-accepted）——但<strong>不豁免</strong>上面的机器项。</p>
+    </div>
+  </div>
+
+  <h2>七把硬钥匙</h2>
   <div class="keys">
     <div class="keycard">
       <div class="k">status: approved</div>
@@ -218,6 +260,14 @@
       <div class="k">&lt;slug&gt;.review-report.json</div>
       <p>review: required 任务的独立审查报告，verdict 为 pass 或 pass-with-issues（后者须经用户确认定稿）才允许结束交付（Stop 钩子第五把钥匙）。</p>
     </div>
+    <div class="keycard">
+      <div class="k">&lt;slug&gt;.lint-report.json</div>
+      <p>docs/specs/ 下机器预检报告，violations 必须为 0；独立硬门禁，accept 标记不豁免机器项。</p>
+    </div>
+    <div class="keycard">
+      <div class="k">&lt;slug&gt;-accept.md</div>
+      <p>用户验收标记（frontmatter accepted: true + slug + date + quoted），使 M/L 级任务可结案（user-accepted），但不豁免机器项。</p>
+    </div>
   </div>
 
   <h2>组件清单</h2>
@@ -236,7 +286,7 @@
   </table>
 
   <footer>
-    dev-sop v1.9.0 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
+    dev-sop v1.10.3 · 执行日志：<code>~/.zcode/hooks/dev-sop.log</code>
   </footer>
 </div>
 </body>

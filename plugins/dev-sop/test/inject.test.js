@@ -132,6 +132,7 @@ test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变
     '执行书 docs/tasks/<slug>-exec.md',
     'exec-plan: exempt',
     'ui/test/review-report.json',
+    'lint-report + accept 标记',
     '单命令≤2min',
     'reviewer 独立审查',
     '重读 spec 与任务书',
@@ -141,7 +142,7 @@ test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变
   assert.ok(!REMINDER_TEXT.includes('\n'), '提醒必须只有一行');
 });
 
-test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+豁免（v1.5.0 改写），第 6 条含 diff 委派要求（v1.2.0），第 11 条含分级路由（v1.4.0 新增）', () => {
+test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+豁免（v1.5.0 改写），第 6 条含分级审查链（v1.10.0），第 11 条含分级路由（v1.4.0 新增）', () => {
   for (let i = 1; i <= 11; i++) {
     assert.ok(CONTEXT_TEXT.includes(i + ')'), '缺少第 ' + i + ' 条');
   }
@@ -164,8 +165,33 @@ test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+
   ]) {
     assert.ok(item5[1].includes(marker), '第 5 条缺少标记：' + marker);
   }
-  assert.ok(CONTEXT_TEXT.includes('改动文件清单'));
-  assert.ok(/6\)[^9]*?diff 获取方式/.test(CONTEXT_TEXT), '第 6 条须含 diff 获取方式');
+  const item6 = /6\)([^]*?)7\)/.exec(CONTEXT_TEXT);
+  assert.ok(item6, '未能截取第 6 条');
+  assert.ok(item6[1].includes('改动文件清单'), '第 6 条须含改动文件清单');
+  // 第 6 条（v1.10.0 分级审查链：lint 前置 + S 免审 + accept 结案路径 + diff-only 快审）
+  for (const marker of [
+    'node scripts/review-lint.mjs',
+    '--out docs/specs/<slug>.lint-report.json',
+    'violations 必须清零',
+    'lint 硬前置',
+    'exec-missing/test-cmd-empty/lint-stale',
+    'S 级变更单 lint 干净即结案',
+    'lite-reviewed-by-lint',
+    'diff-only',
+    '禁止复跑测试',
+    '工具调用预算 ≤10',
+    '报告四段',
+    'fast-review',
+    '<slug>-accept.md',
+    'accepted: true/slug/date/quoted',
+    'user-accepted',
+    'full-review',
+    '全审模式',
+    'diff 获取方式',
+    '复审轮优先消费执行书验证清单（缺项才重跑，现场重跑≤3 项）',
+  ]) {
+    assert.ok(item6[1].includes(marker), '第 6 条缺少标记：' + marker);
+  }
   for (const marker of ['分级路由', '按判据定级', '单问快速通道', '禁止小改套全流程', 'docs/changes/<slug>.md', '才走全量流程', '判据不含 UI 文件']) {
     assert.ok(CONTEXT_TEXT.includes(marker), '第 11 条缺少标记：' + marker);
   }

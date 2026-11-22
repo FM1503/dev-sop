@@ -19,7 +19,9 @@ description: Spec-driven development gate for ANY new feature or project build r
 | `wireframe: approved` | spec frontmatter | UI 文件（.html/.css/.vue/.jsx/.tsx 及 LVGL .c 等）的写入 |
 | `<slug>.ui-report.json` | docs/specs/ | UI 任务的交付（Stop 钩子校验全部 error=0） |
 | `<slug>.test-report.json` | docs/specs/ | 代码任务的交付（Stop 钩子校验 records 全 pass、failed=0） |
-| `<slug>.review-report.json` | docs/specs/ | `review: required` 任务的交付（Stop 钩子校验 verdict 为 pass 或 pass-with-issues） |
+| `<slug>.lint-report.json` | docs/specs/ | v1.10.0 机器门禁硬前置（`node scripts/review-lint.mjs <变更单/spec> --out <路径>`，violations=0 才进入审查链；accept 标记不可豁免） |
+| `<slug>.review-report.json` | docs/specs/ | M 级变更单 / spec（L）的交付路径之一（Stop 钩子校验 verdict 为 pass 或 pass-with-issues；S 级 lint 干净即结案） |
+| `<slug>-accept.md` | docs/specs/ | v1.10.0 用户验收标记结案路径（frontmatter accepted: true / slug / date / quoted 用户原话；M 与 L 适用） |
 
 ## 七阶段流程
 
@@ -55,9 +57,16 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 先写测试（test 路径在白名单内）确认因功能缺失而失败，再实现到全绿；完成后对抗性自审（逻辑 bug / 性能 / 安全 / 规格符合度），发现问题先修再报；交付前按测试计划表逐条执行并产出 `docs/specs/<slug>.test-report.json`（records 全 pass、failed=0）；UI/LVGL 量化验收按单次委派合同**自动闭环**（≤5轮/10min 硬限、--out 落盘、主会话只复核 JSON，合同见第 5 节）。细则：stages-detail.md 第 7 节。
 
-### 阶段 4.5：独立代码审查（reviewer，审查与量化闭环并行，增量主会话快检）
+### 阶段 4.5：分级审查（lint 机器门禁 + 按风险分级审 + 用户验收标记，v1.10.0）
 
-实现完成后**同一条消息**并发两个 Agent 调用——全新 reviewer 子代理（`agents/reviewer.md`：独立上下文、只读、四维审查、同判定规则，审查输入=委派时冻结的初版改动清单）+ 量化闭环，**不得**主会话自任或 code-worker 自审代替。闭环回报后主会话快检增量 diff：仅 P0/P1 追加一轮增量快审（仅增量），P2 记 backlog。委派 prompt 必须提供：任务书路径、规格路径、**改动文件清单、diff 获取方式**（`git diff HEAD~1..HEAD`，或主会话指明 range；首次提交（无上一提交）用 `git diff --no-index` 或直接附改动清单与内容）、报告输出路径 `docs/specs/<slug>.review-report.json`。verdict 判定：任一 P0 或 P1≥3 → fail（整理问题清单委派 code-worker 修复后重审，最多 2 轮，仍 fail 如实呈报用户仲裁，禁止推荐跳过）；仅 P2 或 P1≤2 → pass-with-issues（AskUserQuestion 呈报问题清单，用户确认后定稿）；全清 → pass。`review: required` 的 spec 由 Stop 钩子强制校验报告存在且 verdict 合规。细则：stages-detail.md 第 8 节。
+实现完成第一步**先跑机器门禁**：主会话执行 `node scripts/review-lint.mjs <变更单或 spec> --out docs/specs/<slug>.lint-report.json`（变更单任务输出到 `docs/changes/<slug>.lint-report.json`），机器项必须清零（violations=0）。规则按目标分域（v1.10.2）：**变更单**（frontmatter 有 changed-files）跑 fileset/linecap/placeholder/verify + exec-missing/test-cmd-empty/lint-stale；**spec**（只有 code-files/ui-files）只跑 exec-missing/test-cmd-empty/lint-stale。`--out` 为**整体覆盖写**（`{producedBy,slug,generatedAt,violations,warnings}`，每次只反映本次运行；v1.10.3 起含来源戳 `producedBy:"review-lint"`，accept-check 校验，缺失/错误判为"格式过期或不可信"需重跑；旧聚合结构报告同样被判定为需重跑；`lint-stale` 为 warning——报告 `generatedAt` 早于代码改动时提示重跑，重跑一次即清零）。**lint 为硬前置，任何级别、任何签字都不能豁免**——未清零先修机器项，不进 AI 审。Stop 钩子的 block 文案与真实状态一致（v1.10.3）：lint 未清零先报 lint 违规数与重跑命令，lint 已干净则只列 review-report / accept 标记路径。清零后按级别路由：
+
+- **S 级变更单**：lint 干净即结案（reason=lite-reviewed-by-lint，免 AI 审、免 review-report）；主会话可显式要求快审，仅作信息补充。
+- **M 级变更单**：委派 reviewer **快审模式**（diff-only：材料仅变更单 + lint 输出 + diff；**不复跑测试**、工具调用预算 ≤10、报告四段；复审复用执行书验证清单）；或用户在 AskUserQuestion 中确认验收后写 accept 标记结案。reviewer verdict ∈ {pass, pass-with-issues} 即放行（reason=fast-review），pass-with-issues 仍须向用户呈报后定稿。**M 级另须 `docs/changes/<slug>.test-report.json`**（records≥1 全 pass、summary.failed=0；S 级免，accept 标记不豁免）。
+- **L 级 spec（新功能/新项目/UI/跨模块/安全相关）**：委派 reviewer **全审模式**（六维现流程，与量化验收闭环同消息并发）；或用户验收后写 accept 标记结案（reason=user-accepted，即上文 full-review / user-accepted 两条路径）。委派 prompt 仍须提供任务书/规格路径、改动文件清单、diff 获取方式与报告输出路径。
+- **升档**：主会话在 prompt 显式写"全审模式"可覆盖 M 默认快审；lint 报 exec-missing / test-cmd-empty 时**必须全审**。
+
+**用户验收标记（accept）规范**：用户在 AskUserQuestion 中明确"验收通过/定稿"后，主会话委派一次秒级写标记（docs 白名单），生成 `docs/specs/<slug>-accept.md`（变更单任务可放 `docs/changes/<slug>-accept.md`，同 slug 任一即可），frontmatter 必须 `accepted: true` + `slug:` + `date:` + `quoted:`（**摘录用户原话**，如"确认定稿 v1.9.0"），正文可空。模板见 `references/spec-templates/accept.md`。标记与 review-report 并存以先满足者为准，不互斥；**accept 不豁免 lint 机器项**。日志记录结案路径四态之一：full-review / fast-review / lite-reviewed-by-lint / user-accepted。细则：stages-detail.md 第 8 节。
 
 ## 决策层 / 执行层分离
 
@@ -71,7 +80,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 - **呈现与批准**：规格与线框在请求批准前必须把全文完整呈现在回复中（可分节展示并附路径）；批准必须用 AskUserQuestion 选项完成（批准/需修改/放弃），禁止手动输入确认；线框选项必须用 preview 展示 ASCII 图。细则见第 10 节。
 - **测试纪律**：单命令≤2 分钟（显式设 ≤120000ms timeout）、整场≤10 分钟、fail-fast 不重跑已绿、迭代只跑受影响测试、禁止后台/监听模式；任务书测试计划表之外的测试禁止执行（`hooks/test-guard.js` 强制）。细则见第 7 节与 `references/testing-rules.md`。
-- **独立审查**：`review: required` 任务必须产出 `review-report.json` 且 verdict 为 pass 或 pass-with-issues（后者经用户确认）方可交付，Stop 钩子强制校验。细则见第 8 节。
+- **独立审查（分级）**：`review: required` 任务先过 lint 机器门禁（`<slug>.lint-report.json` violations=0），再按级别——S 级 lint 干净结案（lite-reviewed-by-lint），M 级快审或 accept 标记，L 级全审或 accept 标记；verdict 为 pass 或 pass-with-issues（后者经用户确认）方可交付。accept 标记不豁免机器项。细则见第 8 节。
 - **冲突处理**：门禁拦截与流程要求冲突（如死锁）时，如实报告冲突详情并等待指示，禁止把"跳过流程"作为推荐选项；`.dev-sop-skip` 仅在用户明确要求时创建。
 
 ## 被门禁拦截时

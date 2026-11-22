@@ -17,9 +17,9 @@
 //    pass-with-issues 须主会话已向用户呈报问题清单并经确认定稿，见 SKILL 阶段 4.5）
 //    （第五把钥匙）。
 // 4) 检测 docs/changes/*.md 变更单（v1.4.0 分级路由）：tier S/M 且 status: approved
-//    且 changed-files 任一已实现 → 强制要求 docs/changes/<slug>.review-report.json
-//    verdict 为 pass 或 pass-with-issues；tier M 另要求 docs/changes/<slug>.test-report.json
-//    （records≥1 全 pass）；mtime 最近 5 个变更单全为 tier S 时，放行日志 reason 追加
+//    且 changed-files 任一已实现 → 分级审查链（lint 硬前置 → S 结案 / M review-report 或 accept）；
+//    tier M 另要求 docs/changes/<slug>.test-report.json（records≥1 全 pass，accept 不豁免，v1.10.2 恢复）；
+//    mtime 最近 5 个变更单全为 tier S 时，放行日志 reason 追加
 //    5-consecutive-S-hint、block reason 附合并提醒。
 
 const fs = require('fs');
@@ -314,6 +314,7 @@ function findChangeNotes(projectRoot) {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (path.extname(entry.name).toLowerCase() !== '.md') continue;
+    if (/-accept\.md$/i.test(entry.name)) continue; // v1.10.3：验收标记不是变更单（与 review-lint scanDocEntries 同规则）
     const file = path.join(changesDir, entry.name);
     const fm = readFrontmatter(file);
     if (!fm) continue;
@@ -424,6 +425,323 @@ function checkReviewReport(reportPath) {
 // 连续 S 提醒后缀（v1.4.0 分级路由防滥用）：main() 扫描变更单后按需设置；
 // 有 block 时附于 reason，放行时日志 reason 追加 5-consecutive-S-hint。
 let consecutiveSSuffix = '';
+
+// ---- v1.10.0 分级审查链纯函数（规格 docs/specs/review-speedup.md 2.A/2.C）----
+//
+// REVIEW_CHAIN_REASONS 为放行日志的四态之一（lite-reviewed-by-lint / fast-review /
+// full-review / user-accepted）。lint 为硬前置（所有级别、accept 标记不可豁免）。
+
+const REVIEW_CHAIN_REASONS = ['lite-reviewed-by-lint', 'fast-review', 'full-review', 'user-accepted'];
+
+// 日志 reason 归一：仅四态原样返回，其余（含 block）返回空串
+function reviewChainReason(reason) {
+  return REVIEW_CHAIN_REASONS.indexOf(reason) === -1 ? '' : reason;
+}
+
+// 校验 lint-report（v1.10.2 新结构 {producedBy,slug,generatedAt,violations,warnings}）：返回
+//   { missing, clean, violations, stale?, invalid? }
+// violations 取当前报告数组长度；旧聚合结构（{reports:[...],summary}）、缺 generatedAt、
+// producedBy 缺失或不为 'review-lint'（v1.10.3 来源戳）一律视为格式过期 → stale（需重跑 lint）。
+function isLintReportCurrent(report) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return false;
+  if (Array.isArray(report.reports)) return false; // v1.10.1 及更早的聚合结构
+  if (!Array.isArray(report.violations)) return false;
+  if (typeof report.generatedAt !== 'string' || Number.isNaN(Date.parse(report.generatedAt))) return false;
+  if (report.producedBy !== 'review-lint') return false; // v1.10.3 来源戳：手写报告无法证明机器生成
+  return true;
+}
+
+function checkLintReport(reportPath) {
+  if (!reportPath || !existsSyncSafe(reportPath)) {
+    return { missing: true, clean: false, violations: 0 };
+  }
+  let report;
+  try {
+    report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+  } catch (e) {
+    return { missing: false, clean: false, violations: 0, invalid: true };
+  }
+  if (!isLintReportCurrent(report)) {
+    return { missing: false, clean: false, violations: 0, stale: true };
+  }
+  const n = report.violations.length;
+  return { missing: false, clean: n === 0, violations: n };
+}
+
+// 解析 accept 标记 frontmatter：accepted: true + slug 一致 + quoted 非空 → { ok, quoted }。
+// 任一缺失/不符 → { ok:false, reason }（无效标记不得作为结案路径）。
+function parseAcceptMarker(md, slug) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(md || '').replace(/^\uFEFF/, ''));
+  if (!m) return { ok: false, reason: '缺少 frontmatter' };
+  const field = (key) => {
+    const hit = m[1].match(new RegExp('^' + key + '\\s*:\\s*(.+?)\\s*$', 'mi'));
+    return hit ? hit[1].replace(/^["']|["']$/g, '').trim() : null;
+  };
+  const accepted = field('accepted');
+  const mSlug = field('slug');
+  const date = field('date');
+  const quoted = field('quoted');
+  if (!accepted || accepted.toLowerCase() !== 'true') return { ok: false, reason: 'accepted 不为 true' };
+  if (mSlug && slug && mSlug !== slug) return { ok: false, reason: 'slug 不一致' };
+  if (!quoted) return { ok: false, reason: 'quoted 为空（须摘录用户验收原话）' };
+  // P2：date 缺失/格式非法视为标记无效并提示（不 block；调用方据此回退 review-report 路径）
+  let warning = '';
+  if (!date) {
+    warning = 'accept 标记缺少 date 字段（应为 YYYY-MM-DD）';
+  } else if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date + 'T00:00:00Z'))) {
+    warning = 'accept 标记 date 非法（' + date + '，应为合法 YYYY-MM-DD）';
+  }
+  return { ok: true, quoted, date: date || null, warning };
+}
+
+// 查找 <slug>-accept.md（docs/specs 或 docs/changes 任一）：返回 { ok, path, quoted, reason }
+function findAcceptMarker(projectRoot, slug) {
+  const candidates = [
+    path.join(projectRoot, 'docs', 'specs', slug + '-accept.md'),
+    path.join(projectRoot, 'docs', 'changes', slug + '-accept.md'),
+  ];
+  const reasons = [];
+  for (const p of candidates) {
+    if (!existsSyncSafe(p)) continue;
+    let md;
+    try {
+      md = fs.readFileSync(p, 'utf8');
+    } catch (e) {
+      continue;
+    }
+    const parsed = parseAcceptMarker(md, slug);
+    if (parsed.ok) {
+      return { ok: true, path: p, quoted: parsed.quoted, date: parsed.date || null, warning: parsed.warning || '' };
+    }
+    reasons.push(path.basename(p) + ' 无效：' + parsed.reason);
+  }
+  return { ok: false, present: reasons.length > 0, reason: reasons.join('；') };
+}
+
+// 分级审查链判定（纯函数，便于单测与 e2e）：
+//   input = { slug, kind: 'spec'|'change', tier, implemented, lintReportPath, lintClean,
+//             lintViolations, lintStale, testReportFailure,
+//             reviewReportPath, reviewVerdict, acceptMarker:{ok,quoted,date,warning} }
+// 返回 { allow, reason }：allow 时 reason ∈ 四态；block 时 reason 为中文说明。
+//   ① lint 硬前置：报告缺失 / 非法 / 旧结构（lintStale）/ violations>0 → block（accept 不可豁免）
+//   ② M 级变更单 test-report 未通过（testReportFailure 非空）→ block（accept 不可豁免）
+//   ③ change + tier S → 放行 lite-reviewed-by-lint（免 AI 审）
+//   ④ change + tier M / spec → review-report verdict∈{pass,pass-with-issues}（fast/full-review）
+//      或有效 accept 标记（user-accepted）；都缺 → block（说明两条路径）
+function assessReviewRequirement(input) {
+  const x = input || {};
+  const slug = x.slug || '<slug>';
+  const kind = x.kind === 'change' ? 'change' : 'spec';
+  const tier = String(x.tier || '').toUpperCase();
+  const dirHint = kind === 'change' ? 'docs/changes/' : 'docs/specs/';
+  const reportPath = x.lintReportPath || dirHint + slug + '.lint-report.json';
+
+  // ① lint 硬前置
+  if (!x.lintReportPath) {
+    return {
+      allow: false,
+      reason:
+        'lint 机器项未清零：缺少 lint 报告 ' + reportPath +
+        '（先修机器项：运行 node scripts/review-lint.mjs <变更单/spec> --out ' + reportPath + '，violations 必须为 0）',
+      lintState: 'blocked',
+    };
+  }
+  if (!x.lintClean) {
+    const n = typeof x.lintViolations === 'number' ? x.lintViolations : 0;
+    if (x.lintStale) {
+      return {
+        allow: false,
+        reason:
+          'lint 报告格式过期或不可信（旧聚合结构 / 缺 generatedAt / 缺 review-lint 来源戳）：' + reportPath + ' 需重跑 lint——' +
+          '运行 node scripts/review-lint.mjs <变更单/spec> --out ' + reportPath +
+          '（v1.10.2 起覆盖写 {producedBy,slug,generatedAt,violations,warnings}；v1.10.3 起另写入 producedBy:"review-lint" 来源戳；lint 为硬门禁，accept 标记与人工审查均不可豁免）',
+        lintState: 'blocked',
+      };
+    }
+    return {
+      allow: false,
+      reason:
+        'lint 机器项未清零：' + reportPath + ' 仍有 ' + n + ' 个 violation（先修机器项后重跑 review-lint --out；' +
+        'lint 为硬门禁，accept 标记与人工审查均不可豁免）',
+      lintState: 'blocked',
+    };
+  }
+
+  // 证据链：M 级变更单另须 docs/changes/<slug>.test-report.json（records≥1 全 pass、failed=0；
+  // S 级免，测试结果记入 review 报告）。缺失/不合规 → block，accept 标记亦不豁免。
+  if (x.testReportFailure !== undefined && x.testReportFailure !== null) {
+    return {
+      allow: false,
+      reason:
+        'tier M 变更单验收测试报告未通过：' + String(x.testReportFailure) +
+        '（必须产出 docs/' + (kind === 'change' ? 'changes/' : 'specs/') + slug +
+        '.test-report.json：records≥1 全 pass、summary.failed=0；S 级免此项）',
+      lintState: 'clean',
+      blockKind: 'test-report',
+    };
+  }
+
+  // ② S 级：lint 干净即结案
+  if (kind === 'change' && tier === 'S') {
+    return { allow: true, reason: 'lite-reviewed-by-lint' };
+  }
+
+  // ③ M 级变更单 / spec（L）：review-report 或 accept 标记二者其一
+  if (x.reviewReportPath && (x.reviewVerdict === 'pass' || x.reviewVerdict === 'pass-with-issues')) {
+    return { allow: true, reason: kind === 'change' ? 'fast-review' : 'full-review' };
+  }
+  if (x.acceptMarker && x.acceptMarker.ok) {
+    return { allow: true, reason: 'user-accepted' };
+  }
+  const target = kind === 'change' ? 'docs/changes/' + slug : 'docs/specs/' + slug;
+  return {
+    allow: false,
+    reason:
+      (kind === 'change' ? '变更单 ' : 'spec ') + 'docs/' + (kind === 'change' ? 'changes/' : 'specs/') + slug +
+      '.md lint 已干净，但两条结案路径均未满足：' +
+      '①审查报告 ' + target + '.review-report.json 不存在或 verdict 非 pass/pass-with-issues（' +
+      (kind === 'change' ? '委派 reviewer 快审' : '委派 reviewer 全审') + '）；' +
+      '②用户验收标记 ' + target + '-accept.md 不存在或无效（frontmatter accepted: true + slug + date + quoted 非空）。' +
+      '二者满足其一即可交付。',
+    lintState: 'clean',
+    blockKind: 'review-or-accept',
+  };
+}
+
+// v1.10.3：block 文案的两段式装配——lint 段与路径段按真实状态拼接，不再做字符串匹配分流：
+//   lintState='clean'（lint 已干净、只缺 review/accept 路径）→ 不出现任何 lint 指引；
+//   lintState='blocked'（lint 缺失/过期/违规）→ 先给 lint 计数与"重跑 review-lint"，再列仍需满足的路径项。
+// 返回 { text, lintPart, pathPart }；lintPart 第一句即标注是否含 lint 段（供日志与断言）。
+function composeBlockMessage(verdict, slug, kind) {
+  const v = verdict || {};
+  const isChange = kind === 'change';
+  const dir = isChange ? 'docs/changes/' : 'docs/specs/';
+  const target = dir + slug;
+  const lintState = v.lintState === 'clean' ? 'clean' : (v.blockKind === 'test-report' ? 'clean' : 'blocked');
+  const blockKind = v.blockKind || (lintState === 'blocked' ? 'lint' : 'review-or-accept');
+
+  let lintPart = '';
+  if (lintState === 'blocked') {
+    const raw = String(v.reason || '');
+    // 违规计数来自 reason 明面（violations>0 或 stale 分支的 0 计数）
+    const n = typeof v.lintViolations === 'number' && v.lintViolations > 0
+      ? v.lintViolations
+      : (function () {
+          const m = /仍有\s*(\d+)\s*个/.exec(raw);
+          return m && Number(m[1]) > 0 ? Number(m[1]) : 0;
+        })();
+    const cause = /格式过期/.test(raw)
+      ? 'lint 报告格式过期或不可信（旧聚合结构 / 缺 generatedAt / 缺 review-lint 来源戳），需先重跑 review-lint 覆盖'
+      : (n > 0 ? 'lint 仍有 ' + n + ' 个违规，需先清零（' + raw + '）' : raw);
+    lintPart =
+      cause + '\n重跑：node scripts/review-lint.mjs ' + target + '.md --out ' + target + '.lint-report.json' +
+      '（lint 为硬门禁，须把上面机器项清零后重跑 review-lint --out）。';
+  }
+
+  let pathPart = '';
+  if (blockKind === 'test-report') {
+    pathPart =
+      '验收测试报告未通过，需先产出合规 docs/changes/' + slug + '.test-report.json' +
+      '（records≥1 全 pass、summary.failed=0；M 级硬要求，accept 标记不豁免）。' + String(v.reason || '');
+  } else if (blockKind === 'review-or-accept' || lintState === 'blocked') {
+    pathPart =
+      '需满足：①审查报告 ' + target + '.review-report.json 不存在或 verdict 非 pass/pass-with-issues 时，' +
+      (isChange ? '按 SKILL 阶段 4.5 委派 reviewer 快审，报告写入 ' : '按 SKILL 阶段 4.5 委派 reviewer 全审，报告写入 ') +
+      target + '.review-report.json 且 verdict 为 pass 或 pass-with-issues（后者须先向用户呈报问题清单并经确认）；' +
+      '或②用户已明确验收通过，写验收标记 ' + target + '-accept.md' +
+      '（frontmatter accepted: true / slug / date / quoted 用户原话）。二者满足其一即可交付。';
+  }
+
+  const text = [lintPart, pathPart].filter(Boolean).join('\n');
+  return { text, lintPart, pathPart, lintState, blockKind, hasLintPart: lintPart !== '' };
+}
+
+// 单条 review: required 目标的链判定（读真实报告/标记后调用纯函数）
+function assessSpecReview(projectRoot, spec) {
+  const slug = spec.slug;
+  let lintReportPath = null;
+  for (const sub of ['specs', 'changes']) {
+    const p = path.join(projectRoot, 'docs', sub, slug + '.lint-report.json');
+    if (existsSyncSafe(p)) {
+      lintReportPath = p;
+      break;
+    }
+  }
+  const lint = checkLintReport(lintReportPath);
+  const reviewPath = path.join(projectRoot, 'docs', 'specs', slug + '.review-report.json');
+  let reviewVerdict = null;
+  if (existsSyncSafe(reviewPath)) {
+    try {
+      reviewVerdict = effectiveReportVerdict(JSON.parse(fs.readFileSync(reviewPath, 'utf8')));
+    } catch (e) {
+      reviewVerdict = 'fail';
+    }
+  }
+  return assessReviewRequirement({
+    slug,
+    kind: 'spec',
+    tier: '',
+    implemented: true,
+    lintReportPath,
+    lintClean: lint.clean,
+    lintViolations: lint.violations,
+    lintStale: !!lint.stale,
+    reviewReportPath: existsSyncSafe(reviewPath) ? reviewPath : null,
+    reviewVerdict,
+    acceptMarker: findAcceptMarker(projectRoot, slug),
+  });
+}
+
+// 单条变更单的链判定：返回 { allow, reason, chain }（chain 为四态之一供日志）
+function assessChangeReview(projectRoot, note) {
+  const slug = note.slug;
+  let lintReportPath = null;
+  for (const sub of ['changes', 'specs']) {
+    const p = path.join(projectRoot, 'docs', sub, slug + '.lint-report.json');
+    if (existsSyncSafe(p)) {
+      lintReportPath = p;
+      break;
+    }
+  }
+  const lint = checkLintReport(lintReportPath);
+  const reviewPath = path.join(projectRoot, 'docs', 'changes', slug + '.review-report.json');
+  let reviewVerdict = null;
+  if (existsSyncSafe(reviewPath)) {
+    try {
+      reviewVerdict = effectiveReportVerdict(JSON.parse(fs.readFileSync(reviewPath, 'utf8')));
+    } catch (e) {
+      reviewVerdict = 'fail';
+    }
+  }
+  const marker = findAcceptMarker(projectRoot, slug);
+  const out = assessReviewRequirement({
+    slug,
+    kind: 'change',
+    tier: note.tier,
+    implemented: true,
+    lintReportPath,
+    lintClean: lint.clean,
+    lintViolations: lint.violations,
+    lintStale: !!lint.stale,
+    // v1.10.2 恢复 M 级 test-report 硬校验（S 级仍免）：accept 标记不可豁免
+    testReportFailure:
+      String(note.tier || '').toUpperCase() === 'M'
+        ? checkTestReport(path.join(projectRoot, 'docs', 'changes', slug + '.test-report.json'))
+        : null,
+    reviewReportPath: existsSyncSafe(reviewPath) ? reviewPath : null,
+    reviewVerdict,
+    acceptMarker: marker,
+  });
+  out.chain = reviewChainReason(out.reason);
+  if (out.chain === 'user-accepted' && marker.ok && marker.warning) {
+    process.stderr.write('[dev-sop] warning: ' + marker.warning + '（' + path.basename(marker.path) + '）\n');
+    out.warning = marker.warning;
+  }
+  return out;
+}
+
+// 日志中已记录的结案路径（main 逐条放行时收集；多 slug 以逗号拼接；'multi' 表示尚无记录）
+let reviewChainLog = 'multi';
 
 function block(reason) {
   const finalReason = consecutiveSSuffix ? reason + consecutiveSSuffix : reason;
@@ -574,46 +892,51 @@ async function main() {
         checkTestReport(path.join(projectRoot, 'docs', 'specs', spec.slug + '.test-report.json')) !== null) continue;
     if (existingUi.length > 0 &&
         checkReport(path.join(projectRoot, 'docs', 'specs', spec.slug + '.ui-report.json')) !== null) continue;
-    const reportPath = path.join(projectRoot, 'docs', 'specs', spec.slug + '.review-report.json');
-    const failure = checkReviewReport(reportPath);
-    if (failure) {
+    // v1.10.0 分级链（规格 review-speedup 2.A/2.C）：lint 硬前置 → 审查报告或用户验收标记
+    const verdict = assessSpecReview(projectRoot, spec);
+    if (!verdict.allow) {
+      // v1.10.3：文案按 lint 真实状态装配（lint 干净时不再出现任何 lint 指引）
+      const msg = composeBlockMessage(verdict, spec.slug, 'spec');
       return block(
-        'spec "' + spec.slug + '" 已声明 review: required 且量化验收已通过，但独立代码审查未通过（' + failure + '）。' +
-        '必须：按 SKILL 阶段 4.5 委派 reviewer 子代理（插件内置，独立上下文、只读）对照任务书做四维审查，' +
-        '报告写入 docs/specs/' + spec.slug + '.review-report.json 且 verdict 为 pass 或 pass-with-issues' +
-        '（后者须先向用户呈报问题清单并经确认）后方可交付；' +
+        'spec "' + spec.slug + '" 已声明 review: required 且量化验收已通过，但分级审查链未通过。必须：\n' + msg.text +
         '纯文档/微小任务可在 spec frontmatter 显式声明 review: exempt 豁免。'
       );
     }
+    if (verdict.reason) {
+      reviewChainLog = reviewChainLog === 'multi' ? verdict.reason + '@' + spec.slug : reviewChainLog + ',' + verdict.reason + '@' + spec.slug;
+    }
   }
 
-  // ---- 变更单验收检查（S/M 快速通道，docs/changes/，v1.4.0 分级路由）----
+  // ---- 变更单验收检查（v1.10.0 分级审查链：lint 硬前置 → S 结案 / M review-report 或 accept）----
   for (const note of changeNotes) {
-    let failure;
+    if (note.tier !== 'S' && note.tier !== 'M') continue; // L 走 docs/specs 全量流程
+    if (note.status !== 'approved') continue;
+    const files = Array.isArray(note.changedFiles) ? note.changedFiles : [];
+    if (!files.some((f) => existsSyncSafe(path.resolve(projectRoot, f)))) continue; // 改动未实现，不拦
+    let verdict;
     try {
-      failure = checkChangeNote(note, projectRoot);
+      verdict = assessChangeReview(projectRoot, note);
     } catch (e) {
       process.stderr.write('[dev-sop] failed to check change note: ' + (e && e.message) + '\n');
       appendLog('Stop', 'error', 'check change note: ' + (e && e.message));
       return 0;
     }
-    if (failure) {
+    if (!verdict.allow) {
+      // v1.10.3：文案按 lint 真实状态装配（lint 干净时不再出现任何 lint 指引）
+      const msg = composeBlockMessage(verdict, note.slug, 'change');
       return block(
-        '变更单 docs/changes/' + note.slug + '.md（tier ' + note.tier + '）检测到改动文件已实现但快速通道验收未通过（' + failure + '）。' +
-        '必须：委派 reviewer 快审并把报告写入 docs/changes/' + note.slug + '.review-report.json' +
-        '（verdict 为 pass 或 pass-with-issues）' +
-        (note.tier === 'M'
-          ? '，并产出 docs/changes/' + note.slug + '.test-report.json（records≥1 全 pass、summary.failed=0）'
-          : '（S 级免 test-report，测试结果记入审查报告 summary.checked）') +
-        '后方可交付。'
+        '变更单 docs/changes/' + note.slug + '.md（tier ' + note.tier + '）检测到改动文件已实现但分级审查链未通过。必须：\n' + msg.text
       );
+    }
+    if (verdict.chain) {
+      reviewChainLog = reviewChainLog === 'multi' ? verdict.chain + '@' + note.slug : reviewChainLog + ',' + verdict.chain + '@' + note.slug;
     }
   }
 
   appendLog(
     'Stop',
     'allow',
-    'ui/code/review acceptance ok or nothing implemented' +
+    (reviewChainLog && reviewChainLog !== 'multi' ? reviewChainLog + '@review-chain' : 'ui/code/review acceptance ok or nothing implemented') +
       (consecutiveSSuffix ? ' + 5-consecutive-S-hint' : '')
   );
   return 0;
@@ -639,4 +962,15 @@ module.exports = {
   findChangeNotes,
   checkChangeNote,
   isFiveConsecutiveS,
+  // v1.10.0 分级审查链（规格 docs/specs/review-speedup.md 2.A/2.C）
+  REVIEW_CHAIN_REASONS,
+  reviewChainReason,
+  checkLintReport,
+  parseAcceptMarker,
+  findAcceptMarker,
+  assessReviewRequirement,
+  assessSpecReview,
+  assessChangeReview,
+  // v1.10.3：block 文案两段式装配（lint 段 / 路径段按真实状态拼接）
+  composeBlockMessage,
 };

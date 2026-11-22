@@ -5,6 +5,9 @@
 //   - scripts/flow-status.mjs → 取状态表行（classify）
 //   - hooks/accept-check.js   → 取 Stop 门禁 block/allow（checkChangeNote / code / review checks）
 // 三者必须把每个 slug 归到同一桶：compliant / need-test / need-review。
+// v1.10.0：accept-check 分级审查链以 lint-report 为硬前置，故一致性场景须同时提供干净
+// lint 报告（docs/specs|changes/<slug>.lint-report.json，violations=0），否则 accept-check
+// 以 lint 违规前置 block（该分支由 accept-check.test.js 的 e2e 场景覆盖）。
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -25,6 +28,10 @@ function w(root, rel, content) {
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content, 'utf-8');
 }
+
+// v1.10.0：干净 lint 报告（分级链硬前置）
+// v1.10.2：lint-report 覆盖语义新结构 {target,slug,generatedAt,violations,warnings}
+const CLEAN_LINT = () => JSON.stringify({ producedBy: 'review-lint', target: 'x.md', slug: 'x', generatedAt: new Date().toISOString(), violations: [], warnings: [] });
 
 // ---- 各组件 → canonical 桶 ----
 
@@ -107,6 +114,7 @@ test('一致性A：spec code-files 非 none + review:required，已实现无报�
   w(root, 'docs/specs/aSpec.md', '---\nslug: aSpec\nstatus: approved\ncode-files: src/a.js\nreview: required\n---\n# aSpec\n');
   w(root, 'src/a.js', 'module.exports = 1;\n');
   w(root, 'docs/tasks/aSpec-exec.md', '# exec\n');
+  w(root, 'docs/specs/aSpec.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);
@@ -119,6 +127,7 @@ test('一致性B：tier S 变更单 review:exempt + review-report pass → 三�
   w(root, 'docs/changes/bChg.md', '---\nslug: bChg\nstatus: approved\ntier: S\nreview: exempt\nchanged-files: src/b.js\n---\n# bChg\n');
   w(root, 'src/b.js', 'x\n');
   w(root, 'docs/changes/bChg.review-report.json', JSON.stringify({ verdict: 'pass' }));
+  w(root, 'docs/changes/bChg.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);
@@ -129,6 +138,7 @@ test('一致性C：spec code-files none（纯文档）已实现无 review 字段
   const root = tmpRoot();
   w(root, 'docs/specs/cDoc.md', '---\nslug: cDoc\nstatus: approved\ncode-files: none\n---\n# cDoc\n');
   w(root, 'docs/tasks/cDoc.md', '# task\n');
+  w(root, 'docs/specs/cDoc.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);
@@ -145,6 +155,7 @@ test('一致性D：spec code-files 非 none + review:required + test-report 合�
     'docs/specs/dFeat.test-report.json',
     JSON.stringify({ records: [{ item: 'a', command: 'node --test', durationMs: 5, result: 'pass' }], summary: { passed: 1, failed: 0 } })
   );
+  w(root, 'docs/specs/dFeat.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);
@@ -157,6 +168,7 @@ test('一致性E（未实现期）：spec 声明 code-files 均不存在 + 有�
   const root = tmpRoot();
   w(root, 'docs/specs/eUn.md', '---\nslug: eUn\nstatus: approved\ncode-files: src/e.js\nreview: required\n---\n# eUn\n');
   w(root, 'docs/tasks/eUn-exec.md', '# exec\n');
+  w(root, 'docs/specs/eUn.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);
@@ -175,6 +187,7 @@ test('一致性F（ui 态）：wireframe approved + ui-files 已实现缺 ui-rep
   );
   w(root, 'ui/f.html', '<html></html>\n');
   w(root, 'docs/tasks/fUi-exec.md', '# exec\n');
+  w(root, 'docs/specs/fUi.lint-report.json', CLEAN_LINT());
   const i = injectBucket(root);
   const f = flowBucket(root);
   const a = acceptBucket(root);

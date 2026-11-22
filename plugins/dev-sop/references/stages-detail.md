@@ -12,7 +12,7 @@
 6. 阶段 3.5：任务书（spec 批准之后、委派 code-worker 之前）
 6.5. 阶段 3.6：执行书（任务书之后、委派编码之前，v1.5.0）
 7. 阶段 4：TDD 实现 + 自审
-8. 阶段 4.5：独立代码审查（reviewer）
+8. 阶段 4.5：分级审查（lint 机器门禁 + 按风险分级 + 用户验收标记，v1.10.0）
 9. 决策层 / 执行层分离与执行代理
 10. 呈现与批准规范
 11. 测试计划表模板（五列）
@@ -49,7 +49,7 @@
 3. **拟变更单**：按 `references/spec-templates/change-lite.md` 骨架拟出变更单全文（目标路径 `docs/changes/<slug>.md`，该路径在白名单内），frontmatter 含 slug / `status: approved`（事前单问已批）/ date / `tier: S` / `changed-files: <逗号清单>`；正文结构（v1.5.1 统一）：**改动清单表（文本级精确 old→new，同 exec-plan 模板）** + 影响面/回滚各一行（四行骨架：改什么/为什么/影响面/回滚方式，其中改动清单表为必含项）——变更单内容随第 4 步委派 prompt 逐字带出，不再单独委派落盘。
 4. **委派 code-worker（单轮三步，v1.8.0 编译直改）**：prompt 引用变更单路径并逐字附变更单全文（满足 Agent 委派门禁与执行书门禁——变更单正文须含**变更表**（change-lite 表格驱动：序号/文件/行号/锚点/旧行数/新内容 + `<NEWFILE>`/`<NL>` 约定 + expect_after + 验证字段，见第 6.5 节；勘探可先委派 prospector 并行取锚点表，主会话基于表填变更表并裁决），S 级不再另建独立执行书），worker 同一轮完成 ①落盘变更单 ②`node scripts/compile-change.mjs docs/changes/<slug>.md | python -`（执行书=编译产物 docs/tasks/<slug>-exec.md，一条管道机械应用、锚点零转录）③运行验证命令并回报输出（见第 5 节单轮三步；禁止拆分为"写单"与"执行"两轮，停报纪律不变），**免任务书**；**编译失败 fallback `patch-mode: edit`**（定位行号+最短唯一锚点+定向 Read 禁全文件读入）。
 5. **修完跑受影响测试**（若有）：只跑受影响测试，测试纪律（单命令≤2 分钟等）沿用。
-6. **reviewer diff 快审**：输入含变更单；**新增校验维度：tier 合规——超 S 判据即 P1"要求升级流程"**（四维审查照常）。S 级快审不复跑测试：采信执行回报的测试输出摘要，审查限于静态 diff、清单符合度、tier 合规、断言强度抽查（读测试代码不复跑）；M/L 不变。**冒烟∥快审（v1.6.0）**：快审与主会话只读冒烟同时间片并行发起，结果合并呈报。
+6. **reviewer diff 快审**：输入含变更单；**新增校验维度：tier 合规——超 S 判据即 P1"要求升级流程"**（四维审查照常）。S 级快审不复跑测试：采信执行回报的测试输出摘要，审查限于静态 diff、清单符合度、tier 合规、断言强度抽查（读测试代码不复跑）；M/L 不变。**冒烟∥快审（v1.6.0）**：快审与主会话只读冒烟同时间片并行发起，结果合并呈报。**v1.10.0 起 S 级默认由 lint 结案**（8.1：主会话先跑 review-lint --out 且 violations=0 即结案，reason=lite-reviewed-by-lint，免委派 reviewer；仅主会话显式要求快审时才按下条执行）。
 7. **报告**：`docs/changes/<slug>.review-report.json`（结构同第 8 节；测试结果记入 summary.checked；不复用 docs/specs/ 路径）。verdict 判定规则与修复循环（fail 修复重审最多 2 轮）同第 8 节。
 8. **呈报定稿**：verdict 为 pass 或 pass-with-issues 时，AskUserQuestion 向用户呈报定稿（同第 8 节第 6 步）。
 
@@ -257,9 +257,61 @@ code-worker 侧行为（见 `agents/code-worker.md` 执行书模式）：逐条�
 
    要求：JSON 合法、records 非空、每条 `result` 为 `"pass"`、`summary.failed` 为 0。spec frontmatter 声明了 `code-files` 且代码文件已实现时，Stop 钩子（`hooks/accept-check.js`）会强制校验该报告，未通过无法结束交付。测试执行纪律见 `references/testing-rules.md`。
 
-## 第 8 节：阶段 4.5 独立代码审查（reviewer）
+## 第 8 节：阶段 4.5 分级审查（lint 机器门禁 + 按风险分级 + 用户验收标记）
 
-实现完成后进入审查阶段；审查与量化验收闭环可并行执行（见下方并行指引）。审查者必须是**全新委派的 reviewer 子代理**（插件内置 `agents/reviewer.md`，代理名 `dev-sop:reviewer`：独立上下文 fresh-eyes、只读、开思考、`injectAgentsMd: false` 保持中立），**不得**由主会话自任，更不得由实现该代码的 code-worker 自审代替。
+**v1.10.0 总述**：审查由三段构成——①机器门禁（review-lint，硬前置）；②按级别路由的语义审查（S 免 AI / M 快审 / L 全审）；③结案（lint 结案 / review-report / 用户验收 accept 标记）。三者统一由 Stop 钩子 `hooks/accept-check.js` 的分级链（`assessReviewRequirement` 纯函数）校验，日志 reason 记录四态之一：`lite-reviewed-by-lint` / `fast-review` / `full-review` / `user-accepted`。
+
+### 8.0 机器门禁（所有级别的硬前置）
+
+主会话在实现完成后、委派 reviewer 之前先跑：
+
+```bash
+node scripts/review-lint.mjs docs/changes/<slug>.md --out docs/changes/<slug>.lint-report.json   # S/M 变更单
+node scripts/review-lint.mjs docs/specs/<slug>.md --out docs/specs/<slug>.lint-report.json       # L spec（有变更单时以变更单为输入）
+```
+
+- 输出结构（v1.10.2 覆盖语义，v1.10.3 增来源戳）`{producedBy:"review-lint", target, slug, generatedAt, violations:[], warnings:[]}`：每次 `--out` **整体替换**写盘，只反映本次运行结果（不再聚合追加，历史违规不会残留）。产物名约定 `<slug>.lint-report.json`（specs 或 changes 目录）。旧聚合结构 `{reports, summary}`、缺 `generatedAt`、或 `producedBy` 缺失/不为 `"review-lint"` 均视为"报告格式过期或不可信"，accept-check 直接 block 提示重跑。
+- 规则按目标分域（v1.10.2）：
+  - **变更单**（frontmatter 含 `changed-files`）：fileset / linecap / placeholder / verify（v1.8.0）+ 三条项目规则。
+  - **spec**（只有 `code-files` / `ui-files`）：只跑 `exec-missing` / `test-cmd-empty` / `lint-stale`；fileset / linecap / verify / placeholder 不对 spec 生效（exec 文档章节名为"执行顺序与验证"，不适用 verify 规则）。
+- 项目级规则：`exec-missing`（review: required 或 tier S/M 的条目无任何执行证据——`docs/tasks/<slug>-exec.md`、`docs/changes/<slug>.md`、`<slug>.test-report.json` 三者均不存在）/ `test-cmd-empty`（test-report 的 records[].command 为空串或缺失）/ `lint-stale`（v1.10.3：lint-report 的生成时刻——优先报告内 `generatedAt`，无该字段回退文件 mtime——早于条目任一 code-files/ui-files/changed-files 文件 mtime → **warning**，本次重跑写入新报告即清零；因规则判在写盘之前，若升格 violation 会导致重跑自身 exit 1 的自参照，故不阻断——报告"新于代码"的可信度由 accept-check 的结构/来源戳校验负责）。三规则均按目标 slug 作用域，`lint-stale` 额外判定目标自身；`docs/specs`/`docs/changes` 不存在时记 warning `scan-degraded`（不再静默），规则扫描异常同样降级为 warning。
+- **violations 必须为 0** 才能进入语义审查——lint 为硬门禁，任何级别、任何用户签字都不能豁免（用户签了带机器违规的产物也会被 Stop 钩子挡回）。修复后重跑 review-lint `--out` **覆盖写**报告即可（无需手工删除旧报告；lint-stale 仅提示，重跑后即消失）。
+- **block 文案与真实状态一致（v1.10.3）**：`accept-check` 的 block 文案分两段装配——lint 未清零时先给 lint 违规计数与"重跑 review-lint"，再列仍需满足的 review-report / accept 标记路径；lint 已干净时**只**列路径项，不再出现任何 lint 指引。
+
+### 8.1 分级路由
+
+| 级别 | lint 干净后 | 结案条件 | 日志 reason |
+| --- | --- | --- | --- |
+| **S 级变更单** | 免 AI 审（主会话可显式要求快审，仅信息补充） | lint 干净即结案 | `lite-reviewed-by-lint` |
+| **M 级变更单** | reviewer **快审模式**（diff-only）或用户验收标记 | `docs/changes/<slug>.test-report.json` 合规（records≥1 全 pass、failed=0，accept 不豁免）**且**（review-report verdict ∈ {pass, pass-with-issues} **或** 有效 accept 标记） | `fast-review` / `user-accepted` |
+| **L 级 spec**（review: required） | reviewer **全审模式**或用户验收标记 | 同上 | `full-review` / `user-accepted` |
+
+- 快审模式（`agents/reviewer.md`"审查分级模式"）：材料仅变更单/任务书 + lint 输出 + diff；**禁止复跑测试**（采信 test-report 与执行回报，仅做断言强度抽查）；工具调用预算 **≤10** 次并在报告 summary 记录 `toolCalls` 实测数；报告四段（verdict / 问题计数 / P0-P1 明细 / P2 一行列表）。
+- **复审（第 2+ 轮）效率**：优先消费执行书的验证清单（逐条核对已列明验证项及其记录输出是否覆盖本次改动），缺项或记录与磁盘状态存疑才现场重跑，现场重跑 ≤3 项、不重复 worker 已跑通命令；summary 记 `toolCalls` / `reusedFromExecBook` / `reRanCount`，目标 ≤20 次调用。
+- 全审模式：维持六维现流程（四维 + tier 合规 + 执行书符合度），允许按测试计划表复跑关键测试。
+- **升档触发**：主会话在委派 prompt 显式写"全审模式"覆盖 M 默认快审；lint 报 `exec-missing` 或 `test-cmd-empty` 时**必须全审**；快审中发现安全相关/跨模块改动也应升档。
+
+### 8.2 用户验收标记（accept，v1.10.0 新结案路径）
+
+- 触发：主会话在 AskUserQuestion 中收到用户"验收通过 / 定稿"类明确确认。
+- 产物：`docs/specs/<slug>-accept.md`（或变更单同 slug 在 `docs/changes/<slug>-accept.md`，任一即可），模板 `references/spec-templates/accept.md`：
+
+  ```markdown
+  ---
+  accepted: true
+  slug: <slug>
+  date: <YYYY-MM-DD>
+  quoted: "确认定稿 v1.9.0"
+  ---
+  ```
+
+- 校验：`accepted: true`（严格）+ `slug` 与条目一致 + `quoted` 非空；任一不符视为无效标记（不构成结案）。
+- 与 review-report 并存时以先满足者为准，不互斥；**accept 不豁免 lint 机器项**（lint 干净是唯一前置）。
+- 写入方式：委派一次秒级写标记（docs 白名单路径），无需 reviewer；随后即可结案。
+
+### 8.3 审查执行细节（沿用 v1.3.0–v1.9.0）
+
+实现完成后进入审查阶段；**全审路径**下审查与量化验收闭环可并行执行（见下方并行指引）。审查者必须是**全新委派的 reviewer 子代理**（插件内置 `agents/reviewer.md`，代理名 `dev-sop:reviewer`：独立上下文 fresh-eyes、只读、开思考、`injectAgentsMd: false` 保持中立），**不得**由主会话自任，更不得由实现该代码的 code-worker 自审代替。
 
 **审查∥量化闭环（v1.3.0 并行提效）**：并行发起前，主会话先**本地 WIP commit 冻结基线**，再在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer`（审查实现**初版** diff，输入=冻结基线对应的**改动清单**）+ `code-worker`（执行第 5 节的量化验收自动闭环），重叠审查与量化验收两段时间。**硬约束**：并行窗口期间（双 Agent 运行中）禁止任何 git commit / stash 操作（主会话与执行层均不得执行），待审查与闭环均完成且增量快检结束后再统一提交。
 
@@ -291,9 +343,10 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 
 **spec frontmatter `review` 字段说明：**
 
-- `review: required`：声明该 spec 交付必须经独立审查。当其 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规时，Stop 钩子（`hooks/accept-check.js`，第五把钥匙）强制校验 `docs/specs/<slug>.review-report.json` 存在、JSON 合法且 `verdict` 为 `pass` 或 `pass-with-issues`，否则无法结束交付（`fail`/未知取值/报告缺失/非法 JSON 均阻断；`pass-with-issues` 须经第 6 步向用户呈报问题清单并经确认后定稿）。新项目 spec 默认加 `review: required`（第 4 节模板已内置该行）。
+- `review: required`：声明该 spec 交付必须经审查链。当其 code-files/ui-files 任一文件已实现且 test-report/ui-report 已合规时，Stop 钩子（`hooks/accept-check.js`）按 v1.10.0 分级链校验：① `docs/specs/<slug>.lint-report.json` 存在且 `violations=[]`（v1.10.2 覆盖语义结构；旧聚合结构判"格式过期"需重跑 lint；否则 block 先修机器项）；② spec 视为 L 级——`docs/specs/<slug>.review-report.json` verdict 为 pass 或 pass-with-issues，**或** `docs/specs/<slug>-accept.md` 为有效验收标记，二者其一即可；都缺 → block（reason 同时说明两条路径）。新项目 spec 默认加 `review: required`（第 4 节模板已内置该行）。
 - `review: exempt`：纯文档/微小任务可显式声明豁免，视为无审查要求。
-- 存量 spec 不写 `review` 字段则完全不受影响。
+- 存量 spec 不写 `review` 字段则完全不受影响（第三段链只对 `review: required` 的 spec 生效）。
+- **历史兼容提示**：新链对"已实现且 review: required"的历史 spec 同样生效——这些 spec 若没有 `<slug>.lint-report.json` 会被 Stop 钩子 block（按 8.0 重跑一次 lint 即可清除，不做自动豁免）。
 
 ## 第 9 节：决策层 / 执行层分离与执行代理
 
@@ -367,5 +420,7 @@ verdict 判定规则（reviewer 与 Stop 钩子同规则）：任何 P0 → `fai
 ```
 ISO时间 | 事件=PreToolUse | tool=工具名 | target=目标文件或(agent) | decision=allow|deny|error | reason=简要原因
 ```
+
+v1.10.0 起 Stop 放行行的 reason 含审查结案路径（`<四态>@<slug>@review-chain`，多 slug 以逗号拼接；四态 = lite-reviewed-by-lint / fast-review / full-review / user-accepted），据此可审计每次交付走的是哪条路径。
 
 UserPromptSubmit 事件使用 `decision=inject-full|inject-reminder|inject|pass`（v1.2.0：首轮全文 inject-full、次轮一行提醒 inject-reminder、无 session 回退 inject）。排查门禁误拦或未触发时，先看该日志。
