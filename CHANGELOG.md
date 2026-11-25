@@ -1,5 +1,30 @@
 # 更新日志
 
+## [1.12.0] - 2026-11-25
+
+### 变更
+
+- **reviewer 整改：只审本次 diff**（`agents/reviewer.md` 重写）：取消 v1.10.0 的快审/全审两套模式，M 与 L 统一为 diff 审查——审查对象是委派给出的 diff（新增文件即 diff 的一部分），diff 外代码仅在判断改动行确需时定向读取（≤4 次）；不跑测试、不起服务、不开浏览器；工具调用预算 ≤12；只报写得出触发条件与错误后果的 P0/P1，风格类不报，P2 ≤3 条，核实不了的疑点进 `summary.unverified`（不计入 verdict），diff 外的既有问题进 `summary.outOfScope`。代理定义新增 `thoughtLevel: high` 与 `tools: [Read, Write, Bash]`（此前继承会话 max 档并持有全部工具）
+- **reviewer 委派清单硬门禁**（`hooks/gate.js`）：`subagent_type` 含 reviewer 的委派，prompt 剔除围栏代码块（内联 diff 不计）后正文 >1500 字（非空白字符）或列表条目 >10 即拒绝并给出精简指引；新增导出 `isReviewerDelegation` / `assessReviewerPrompt` / `REVIEWER_PROMPT_DENY_REASON`
+- **精简委派模板**：reviewer 委派 prompt 固定五项（取 diff 的命令或内联 diff、改动文件清单、变更单或任务书路径、报告输出路径、至多 3 条一行关注点），不得写核对清单、指定命令或要求逐项给实证；SKILL 阶段 4.5、stages-detail 8.1/8.3、注入规则第 6 条同步
+- 审查报告 `summary` 改记 `toolCalls` / `coverage` / `unverified` / `outOfScope`（`p0/p1/p2` 保留；`checked`、`mode` 取消）；verdict 规则、review-lint、accept-check 与日志四态（lite-reviewed-by-lint / fast-review / full-review / user-accepted）不变
+
+### 背景
+
+- 2026-11-16 至 11-25 共 118 次已完成的 reviewer 运行：平均 26.5 次工具调用、8.1 分钟、128 万 token，仅 8% 落在 10 次调用以内；13 份报告 54 个问题中 87% 为 P2。委派清单 >3000 字时平均 41 次调用 / 13.7 分钟，<1500 字时 17 次 / 6 分钟
+- v1.10.0–v1.10.3 的快审预算写进了源码，但插件安装停留在 1.9.0，从未运行过
+
+### 说明
+
+- 测试：新增 `test/reviewer-delegation.test.js`（14 条），全量回归见变更单 `docs/changes/reviewer-diff-scope.test-report.json`
+- 已知上限（backlog）：`tools` 无法限制 Bash 的具体用法，"只许 git diff/grep"仍是规则约束；`compile-change` 变更表单元格会裁掉新内容首行缩进（本次通过从列首行起替换规避）
+
+## [1.11.0] - 2026-11-24
+
+### 新增
+
+- **跨会话上下文账本（context-ledger）**：项目级 `docs/context/` 五卡账本（INDEX/ACTIVE/DECISIONS/CODEMAP/GOTCHAS + archive/）。`inject.js` 首轮注入 INDEX 索引块（≤1536B、独立 `dev-sop-ledger-*.latch` 闩锁、非开发意图也注入）并新增第 12 条纪律；`gate.js` 白名单加入 `docs/context/`（仅 .md/.json）并在代码写入放行点 touch `dev-sop-ctx-touch-<id>`；`accept-check.js` Stop 新增账本软门禁（本会话改过代码但 ACTIVE.md 未更新 → 只拦一次，`dev-sop-ctx-nag-<id>` 闩锁，全程 fail-open）。新增模板 `references/context-ledger.md` 与测试 `test/context-ledger.test.js`（13 用例）。无账本项目行为与 v1.10.3 逐字节一致（e2e 回归锁定）。
+
 ## [1.10.3] - 2026-11-23
 
 ### 修复

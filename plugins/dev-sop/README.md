@@ -1,6 +1,6 @@
-# dev-sop：开发 SOP 门禁（v1.10.3）
+# dev-sop：开发 SOP 门禁（v1.12.0）
 
-让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。v1.4.0 起引入**变更分级路由**：流程重量与风险成正比——S 快速通道（单问批准+变更单）／M 精简四步／L 全量流程，判据与流程见 `references/stages-detail.md` 第 1 节。v1.5.0 起引入**执行书硬门禁**：编码类 Agent 委派必须附主会话亲自勘探（Read/Grep）产出的执行书 `docs/tasks/<slug>-exec.md`（文本级精确 old→new + 每步验证命令与预期输出；S 级并入变更单改动清单），code-worker 零思考纯执行、不匹配即停报；非编码任务或用户明确豁免标 `exec-plan: exempt`。v1.6.0 起实现委派**单轮三步**（worker 同一轮完成落盘执行书+机械应用+验证，不再拆"写单/执行"两轮），S 级**快审瘦身**（采信执行回报、不复跑测试），冒烟与快审同时间片**并行**。v1.7.0 起**补丁直改**：主会话勘探后生成确定性补丁脚本（前置/后置断言，失败即 exit 1 打印 ±3 行上下文）嵌入执行书，code-worker 一条 Bash 原样执行"执行命令"——把"改文件"从 LLM 手里拿走（worker 段 <40s）；`patch-mode: edit` 备选走定向 Read+最短唯一锚点；`gate.js` 同步新增 Bash 写模式检测（`echo >`/`sed -i`/`tee`/`git apply` 写代码文件同样过门禁）。v1.10.0 起**审查提速**：review-lint 升格为机器硬门禁（`--out` 产出 `<slug>.lint-report.json`，violations=0 才能进审查链，accept 标记不可豁免；新增 exec-missing / test-cmd-empty / lint-stale 三条规则），AI 审按风险分级（**S 级 lint 结案免审 / M 级快审 diff-only、工具预算 ≤10、不复跑测试 / L 级全审**），用户验收标记 `<slug>-accept.md` 成为一等结案路径。
+让 AI 像专业工程师一样先问清需求、查证方案、线框确认、量化验收，再动代码。v1.4.0 起引入**变更分级路由**：流程重量与风险成正比——S 快速通道（单问批准+变更单）／M 精简四步／L 全量流程，判据与流程见 `references/stages-detail.md` 第 1 节。v1.5.0 起引入**执行书硬门禁**：编码类 Agent 委派必须附主会话亲自勘探（Read/Grep）产出的执行书 `docs/tasks/<slug>-exec.md`（文本级精确 old→new + 每步验证命令与预期输出；S 级并入变更单改动清单），code-worker 零思考纯执行、不匹配即停报；非编码任务或用户明确豁免标 `exec-plan: exempt`。v1.6.0 起实现委派**单轮三步**（worker 同一轮完成落盘执行书+机械应用+验证，不再拆"写单/执行"两轮），S 级**快审瘦身**（采信执行回报、不复跑测试），冒烟与快审同时间片**并行**。v1.7.0 起**补丁直改**：主会话勘探后生成确定性补丁脚本（前置/后置断言，失败即 exit 1 打印 ±3 行上下文）嵌入执行书，code-worker 一条 Bash 原样执行"执行命令"——把"改文件"从 LLM 手里拿走（worker 段 <40s）；`patch-mode: edit` 备选走定向 Read+最短唯一锚点；`gate.js` 同步新增 Bash 写模式检测（`echo >`/`sed -i`/`tee`/`git apply` 写代码文件同样过门禁）。v1.10.0 起**审查提速**：review-lint 升格为机器硬门禁（`--out` 产出 `<slug>.lint-report.json`，violations=0 才能进审查链，accept 标记不可豁免；新增 exec-missing / test-cmd-empty / lint-stale 三条规则），AI 审按风险分级（**S 级 lint 结案免审 / M 级快审 diff-only、工具预算 ≤10、不复跑测试 / L 级全审**），用户验收标记 `<slug>-accept.md` 成为一等结案路径。v1.11.0 起**跨会话上下文账本**：项目 docs/context/ 五卡账本（INDEX/ACTIVE/DECISIONS/CODEMAP/GOTCHAS），新会话首轮只注入索引（≤1.5KB、独立账本闩锁、非开发意图也注入），卡片按需读取；docs/context/ 入 gate 白名单主会话直写，代码写入触点 + Stop 软门禁催落盘一次；无账本项目行为与 v1.10.3 逐字节一致（回归测试锁定）。
 
 ## 解决什么问题
 
@@ -25,7 +25,7 @@
 
 - **每轮上下文注入**（`hooks/inject.js`）：检测到开发意图的提示词时，自动注入七阶段流程提醒；v1.2.0 起带会话级注入闩锁——同一会话首轮注入全文，次轮起仅注入一行提醒（闩锁文件 `~/.zcode/hooks/dev-sop-inject-<sessionId>.latch`，48h 自动清理），显著节流。
 - **执行代理**（`agents/code-worker.md`）：主会话只决策，编码一律委派给禁用思考、只执行不决策的 code-worker 子代理。
-- **对抗性审查**（`agents/reviewer.md`）：实现完成后进入审查（审查与量化验收闭环可并行执行，见 SKILL 阶段 4.5），委派独立上下文、只读的 reviewer 子代理对照任务书做四维审查，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿）。
+- **独立审查**（`agents/reviewer.md`）：实现完成后进入审查（审查与量化验收闭环可并行执行，见 SKILL 阶段 4.5），委派独立上下文、只读的 reviewer 子代理**只审本次 diff**，产出 `review-report.json`（fail 时修复重审最多 2 轮；pass-with-issues 经向用户呈报确认后定稿）。
 
 ## 七阶段工作流程
 
@@ -39,7 +39,9 @@
 
 > v1.3.0 提效：阶段 1 内**调研与访谈并行**（首批答复后同轮先发 WebSearch）；阶段 5 量化验收改为**单次委派自动闭环**（采集→分析→修复→复测，≤5 轮 / 10 分钟硬限，主会话只复核报告 JSON）；阶段 5 与独立审查**同消息并发**，闭环增量由主会话快检（仅 P0/P1 追加增量快审，P2 记 backlog）。
 >
-> v1.10.0 审查提速：实现完成 → 主会话先跑 `node scripts/review-lint.mjs <变更单/spec> --out docs/specs/<slug>.lint-report.json` **机器项清零** → 按级别结案：**S 级 lint 即结案**（免 AI 审）／**M 级快审**（diff-only，预算 ≤10 次工具调用，不复跑测试）／**L 级全审**；M 与 L 也可由用户验收标记 `<slug>-accept.md` 直接结案（accept 不豁免机器项）。
+> v1.10.0 审查提速：实现完成 → 主会话先跑 `node scripts/review-lint.mjs <变更单/spec> --out docs/specs/<slug>.lint-report.json` **机器项清零** → 按级别结案：**S 级 lint 即结案**（免 AI 审）／**M 级与 L 级统一 diff 审查**；M 与 L 也可由用户验收标记 `<slug>-accept.md` 直接结案（accept 不豁免机器项）。
+>
+> v1.12.0 reviewer 整改：reviewer 只审本次 diff（不跑测试、不起服务、不开浏览器，预算 ≤12 次工具调用，`thoughtLevel: high`，工具仅 Read/Write/Bash），只报写得出触发条件与错误后果的 P0/P1；主会话委派 prompt 固定五项（取 diff 的方式、改动文件清单、变更单/任务书路径、报告输出路径、≤3 条关注点），正文 >1500 字或条目 >10 由 gate 拒绝。背景：118 次运行实测，委派清单 >3000 字时平均 41 次工具调用 / 13.7 分钟，<1500 字时 17 次 / 6 分钟。
 
 ## 组件清单
 
@@ -61,7 +63,7 @@
 | `references/spec-templates/change-lite.md` | S/M 变更单骨架（v1.4.0）：阶段 0S/0M 复制到 `docs/changes/<slug>.md`，frontmatter slug/status: approved/date/tier: S/changed-files + 正文四行（改什么/为什么/影响面/回滚方式），M 可加长含验收 checklist |
 | `references/spec-templates/exec-plan.md` | 执行书骨架（v1.5.0）：阶段 3.6 主会话亲自勘探（Read/Grep）后复制到 `docs/tasks/<slug>-exec.md`，含"改动清单"表（文本级精确 old→new）与"执行顺序与验证"表（每步命令+精确预期输出）；S 级并入变更单改动清单表；v1.7.0 起新增"补丁脚本+执行命令"两节（补丁直改默认，worker 一条 Bash 原样执行）与"定位行号"列（patch-mode: edit 备选） |
 | `agents/code-worker.md` | 执行代理定义：禁用思考、只执行不决策，是唯一写代码的角色；v1.5.0 新增执行书模式（逐条按序应用+每步验证比对、三禁止、不匹配即停报、无书拒执行）；v1.7.0 新增补丁直改模式（一条 Bash 原样执行执行命令，禁止改写/拆分/手工复刻；5 行回报） |
-| `agents/reviewer.md` | 审查代理定义：独立上下文、只读（唯一可写 review-report.json），v1.10.0 分级模式——快审（M 默认：材料仅变更单+lint 输出+diff、禁止复跑测试、工具预算 ≤10、四段报告）与全审（L/新功能/安全相关/lint 报 exec-missing·test-cmd-empty 时升档：六维流程）；S 级默认免 AI 审 |
+| `agents/reviewer.md` | 审查代理定义（v1.12.0）：独立上下文、只读（唯一可写 review-report.json），只审本次 diff——不跑测试、不起服务、不开浏览器，工具调用预算 ≤12，只报写得出触发条件与错误后果的 P0/P1（风格类不报，P2 ≤3 条）；`thoughtLevel: high`、工具仅 Read/Write/Bash（如需改档位或模型：复制到 ~/.zcode/agents/reviewer.md 改 frontmatter，用户级同名定义优先）；S 级默认免 AI 审 |
 | `commands/spec.md` | `/spec` 命令：手动进入规格驱动流程的入口 |
 | `skills/dev-sop/SKILL.md` | 七阶段流程骨架说明书（技能入口；细则在 `references/stages-detail.md`） |
 

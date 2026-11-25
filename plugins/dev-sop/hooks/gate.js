@@ -94,6 +94,46 @@ function hasSkipMarker(projectRoot) {
   );
 }
 
+// ---- v1.11.0 账本软门禁触点（规格 docs/specs/context-ledger.md 2.4）----
+// main() 解析 payload 后写 CURRENT_SESSION_ID；代码写入放行点 touch
+// ~/.zcode/hooks/dev-sop-ctx-touch-<id>，accept-check Stop 与 ACTIVE.md mtime 比对。
+// 无 session 字段 → 不记录（门禁自然退化为不触发）。任何异常 fail-open。
+let CURRENT_SESSION_ID = null;
+const CTX_TOUCH_PREFIX = 'dev-sop-ctx-touch-';
+const CTX_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+
+function ctxTouchFileFor(sessionId) {
+  return path.join(
+    os.homedir(),
+    '.zcode',
+    'hooks',
+    CTX_TOUCH_PREFIX + String(sessionId).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 128)
+  );
+}
+
+function touchCtxCodeWrite(targetFile) {
+  if (!CURRENT_SESSION_ID) return;
+  // 审查修复轮 P2-1：文档类目标（.md/.json）不算代码写入，与 Bash 链豁免对齐
+  if (typeof targetFile === 'string' && /\.(?:md|json)$/i.test(targetFile)) return;
+  try {
+    const dir = path.join(os.homedir(), '.zcode', 'hooks');
+    fs.mkdirSync(dir, { recursive: true });
+    const re = new RegExp('^' + CTX_TOUCH_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '.+$');
+    for (const name of fs.readdirSync(dir)) {
+      if (!re.test(name)) continue;
+      const full = path.join(dir, name);
+      try {
+        if (Date.now() - fs.statSync(full).mtimeMs > CTX_MAX_AGE_MS) fs.unlinkSync(full);
+      } catch (e) {
+        // already gone
+      }
+    }
+    fs.writeFileSync(ctxTouchFileFor(CURRENT_SESSION_ID), new Date().toISOString() + '\n', 'utf8');
+  } catch (e) {
+    // touch 失败不影响放行判定
+  }
+}
+
 function isWhitelisted(absFile, projectRoot, originalPath) {
   const normalized = originalPath.replace(/\\/g, '/');
   const segments = normalized.split('/').filter(Boolean);
@@ -104,7 +144,11 @@ function isWhitelisted(absFile, projectRoot, originalPath) {
   const docsExt = path.extname(base).toLowerCase();
   if (docsExt === '.md' || docsExt === '.json') {
     for (let i = 0; i < segments.length - 1; i++) {
-      if (segments[i] === 'docs' && (segments[i + 1] === 'specs' || segments[i + 1] === 'changes')) return true;
+      if (
+        segments[i] === 'docs' &&
+        (segments[i + 1] === 'specs' || segments[i + 1] === 'changes' || segments[i + 1] === 'context')
+      )
+        return true;
     }
   }
 
@@ -364,6 +408,39 @@ function isProspectorDelegation(payload) {
     .split(/\r?\n/, 1)[0]
     .trim();
   return firstLine === 'PROSPECTOR-READONLY';
+}
+
+// ---- v1.12.0 reviewer 委派清单硬门禁（变更单 docs/changes/reviewer-diff-scope.md）----
+// 实测 118 次 reviewer 运行：委派清单 >3000 字时平均 41 次工具调用 / 13.7 分钟，
+// <1500 字时 17 次 / 6 分钟——主会话的步骤化核对清单会把 reviewer 引向到处乱查。
+// isReviewerDelegation：subagent_type 含 'reviewer'（dev-sop:reviewer / reviewer 均命中）。
+// assessReviewerPrompt：剔除围栏代码块（三反引号之间；内联 diff 属数据不计）后，
+// 正文按"非空白字符数"计 ≤ REVIEWER_PROMPT_MAX_CHARS、列表条目（行首为 数字. / 数字) /
+// - / * / + 后接空白）计 ≤ REVIEWER_PROMPT_MAX_ITEMS → ok；任一超限 → 不放行。
+const REVIEWER_PROMPT_MAX_CHARS = 1500;
+const REVIEWER_PROMPT_MAX_ITEMS = 10;
+const REVIEWER_PROMPT_DENY_REASON =
+  'reviewer 委派清单超限（正文 ≤1500 字、条目 ≤10；围栏代码块里的内联 diff 不计）。' +
+  '委派只给五项：取 diff 的命令或内联 diff、改动文件清单（新增/修改）、变更单或任务书路径、' +
+  '报告输出路径、至多 3 条一行关注点。不要写核对清单、指定要跑的命令或要求逐项给实证——' +
+  '背景写进变更单，reviewer 会按需自己读。';
+
+function isReviewerDelegation(payload) {
+  return getSubagentType(payload).includes('reviewer');
+}
+
+function assessReviewerPrompt(prompt) {
+  const body = String(prompt || '').replace(/```[^]*?(?:```|$)/g, '');
+  const chars = body.replace(/\s+/g, '').length;
+  const numbered = (body.match(/^\s*\d+[.)]\s+\S/gm) || []).length;
+  const dashed = (body.match(/^\s*[-*+]\s+\S/gm) || []).length;
+  return {
+    ok: chars <= REVIEWER_PROMPT_MAX_CHARS && numbered + dashed <= REVIEWER_PROMPT_MAX_ITEMS,
+    chars: chars,
+    items: numbered + dashed,
+    maxChars: REVIEWER_PROMPT_MAX_CHARS,
+    maxItems: REVIEWER_PROMPT_MAX_ITEMS,
+  };
 }
 
 // ---- v1.7.0 Bash 写模式检测（补丁直改配套，堵 echo>src/a.js / sed -i / tee / git apply 绕过洞）----
@@ -793,6 +870,13 @@ async function main() {
   }
 
   const toolName = getToolName(payload);
+  // v1.11.0：记录会话 id 供代码写入放行点 touch（session_id/sessionId 兼容；缺省 null）
+  CURRENT_SESSION_ID =
+    payload && typeof payload.session_id === 'string' && payload.session_id.trim() !== ''
+      ? payload.session_id.trim()
+      : payload && typeof payload.sessionId === 'string' && payload.sessionId.trim() !== ''
+        ? payload.sessionId.trim()
+        : null;
 
   // ---- Agent / Task delegation ----
   if (AGENT_TOOLS.has(toolName)) {
@@ -836,6 +920,28 @@ async function main() {
       return 0;
     }
 
+    // ---- v1.12.0 reviewer 委派清单硬门禁（置于一切放行路径之前）----
+    try {
+      if (isReviewerDelegation(payload)) {
+        const reviewerLimit = assessReviewerPrompt(promptText);
+        if (!reviewerLimit.ok) {
+          appendLog(
+            'PreToolUse',
+            toolName,
+            '(agent)',
+            'deny',
+            'reviewer-prompt-over-limit chars=' + reviewerLimit.chars + ' items=' + reviewerLimit.items
+          );
+          return deny(REVIEWER_PROMPT_DENY_REASON);
+        }
+        appendLog('PreToolUse', toolName, '(agent)', 'allow', 'reviewer-prompt-within-limit');
+      }
+    } catch (e) {
+      // 解析异常时不在此拒绝，继续走下方常规委派判定链
+      process.stderr.write('[dev-sop] failed to scan reviewer prompt: ' + (e && e.message) + '\n');
+      appendLog('PreToolUse', toolName, '(agent)', 'error', 'scan reviewer prompt: ' + (e && e.message));
+    }
+
     let allow = false;
     try {
       allow = referencesDocsPath(promptText);
@@ -865,6 +971,13 @@ async function main() {
     }
     if (execPlanOk) {
       appendLog('PreToolUse', toolName, '(agent)', 'allow', 'exec-plan reference or exempt marker');
+      // 审查修复轮 P1（规格 2.4）：编码类委派 → touch 本会话（软门禁覆盖委派模式）；
+      // exec-plan: exempt 与非编码委派不记（fail-open，异常吞）。
+      try {
+        if (isCodingDelegation(promptText) && !EXEC_PLAN_EXEMPT_RE.test(promptText)) touchCtxCodeWrite();
+      } catch (e) {
+        // fail-open
+      }
       return 0;
     }
 
@@ -1011,6 +1124,7 @@ function gateFileWrite(toolName, rawFile) {
   }
   if (approved) {
     appendLog('PreToolUse', toolName, rawFile, 'allow', 'approved spec found');
+    touchCtxCodeWrite(rawFile);
     return 0;
   }
 
@@ -1025,6 +1139,7 @@ function gateFileWrite(toolName, rawFile) {
   }
   if (approvedChangeNote) {
     appendLog('PreToolUse', toolName, rawFile, 'allow', 'approved change note found');
+    touchCtxCodeWrite(rawFile);
     return 0;
   }
 
@@ -1061,6 +1176,7 @@ function gateBashWriteCommand(toolName, command) {
   }
   if (approvedChangeNote) {
     appendLog('PreToolUse', toolName, command.slice(0, 120), 'allow', 'approved change note found');
+    touchCtxCodeWrite();
     return 0;
   }
 
@@ -1074,6 +1190,7 @@ function gateBashWriteCommand(toolName, command) {
   }
   if (approved) {
     appendLog('PreToolUse', toolName, command.slice(0, 120), 'allow', 'approved spec found');
+    touchCtxCodeWrite();
     return 0;
   }
 
@@ -1094,6 +1211,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  isReviewerDelegation,
+  assessReviewerPrompt,
+  REVIEWER_PROMPT_DENY_REASON,
+  CTX_TOUCH_PREFIX,
+  ctxTouchFileFor,
   hasApprovedSpec,
   hasWireframeApprovedSpec,
   findApprovedChangeNote,

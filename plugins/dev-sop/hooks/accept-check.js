@@ -60,6 +60,43 @@ function hasSkipMarker(projectRoot) {
   );
 }
 
+// ---- v1.11.0 账本软门禁（规格 docs/specs/context-ledger.md 2.4）----
+const CTX_TOUCH_PREFIX = 'dev-sop-ctx-touch-';
+const CTX_NAG_PREFIX = 'dev-sop-ctx-nag-';
+
+function ctxFileFor(prefix, sessionId) {
+  return path.join(
+    os.homedir(),
+    '.zcode',
+    'hooks',
+    prefix + String(sessionId).replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 128)
+  );
+}
+
+function extractSessionIdLoose(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (typeof payload.session_id === 'string' && payload.session_id.trim() !== '') return payload.session_id.trim();
+  if (typeof payload.sessionId === 'string' && payload.sessionId.trim() !== '') return payload.sessionId.trim();
+  return null;
+}
+
+// 纯函数判定：'block' | 'pass'。账本存在且本会话有代码写入 touch 且 ACTIVE.md 不新于
+// touch（含 ACTIVE.md 缺失）→ block；无账本/无 session/已拦过一次（nag）→ pass。
+function decideLedgerNag({ ledgerExists, sessionId, touchMs, activeMs, nagExists }) {
+  if (!ledgerExists || !sessionId || nagExists) return 'pass';
+  if (typeof touchMs !== 'number') return 'pass';
+  const active = typeof activeMs === 'number' ? activeMs : -Infinity;
+  return touchMs > active ? 'block' : 'pass';
+}
+
+function mtimeMsSafe(p) {
+  try {
+    return fs.statSync(p).mtimeMs;
+  } catch (e) {
+    return null;
+  }
+}
+
 // 与 gate.js 相同的项目根探测逻辑
 function findProjectRoot(probeFile) {
   if (process.env.ZCODE_PROJECT_DIR) {
@@ -769,9 +806,13 @@ function readStdin() {
 }
 
 async function main() {
-  // stdin 内容不影响判定，读失败也继续
+  // v1.11.0：stdin 仅取 session（账本软门禁）；读取/解析失败 → null，不影响既有判定
+  let stdinSessionId = null;
   try {
-    await readStdin();
+    const rawStdin = await readStdin();
+    if (rawStdin && rawStdin.trim()) {
+      stdinSessionId = extractSessionIdLoose(JSON.parse(rawStdin));
+    }
   } catch (e) {
     // ignore
   }
@@ -933,6 +974,36 @@ async function main() {
     }
   }
 
+  // ---- v1.11.0 账本软门禁：本会话改过代码但 ACTIVE.md 未跟上 → 只拦一次（nag 闩锁）----
+  try {
+    const ledgerDir = path.join(projectRoot, 'docs', 'context');
+    if (existsSyncSafe(ledgerDir) && stdinSessionId) {
+      const nagFile = ctxFileFor(CTX_NAG_PREFIX, stdinSessionId);
+      const decision = decideLedgerNag({
+        ledgerExists: true,
+        sessionId: stdinSessionId,
+        touchMs: mtimeMsSafe(ctxFileFor(CTX_TOUCH_PREFIX, stdinSessionId)),
+        activeMs: mtimeMsSafe(path.join(ledgerDir, 'ACTIVE.md')),
+        nagExists: existsSyncSafe(nagFile),
+      });
+      if (decision === 'block') {
+        try {
+          fs.mkdirSync(path.dirname(nagFile), { recursive: true });
+          fs.writeFileSync(nagFile, new Date().toISOString() + '\n', 'utf8');
+        } catch (e) {
+          // fail-open：nag 未写 → 下次 Stop 可能再拦一次，不阻断判定
+        }
+        return block(
+          '上下文账本未落盘：本会话改过代码但 docs/context/ACTIVE.md 未更新（mtime 早于最近一次代码写入）。' +
+          '请更新 ACTIVE.md（当前阶段/下一步/定稿项；定稿则清除对应节并把结论压入 DECISIONS.md）后再次结束。' +
+          '（软门禁已触发一次，本会话不会重复拦截）'
+        );
+      }
+    }
+  } catch (e) {
+    // fail-open：账本门禁任何异常不阻断
+  }
+
   appendLog(
     'Stop',
     'allow',
@@ -955,6 +1026,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  CTX_TOUCH_PREFIX,
+  CTX_NAG_PREFIX,
+  ctxFileFor,
+  decideLedgerNag,
+  extractSessionIdLoose,
   computeVerdictFromIssues,
   effectiveReportVerdict,
   checkReviewReport,

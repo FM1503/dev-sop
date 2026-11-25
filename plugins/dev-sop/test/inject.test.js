@@ -142,8 +142,8 @@ test('REMINDER_TEXT：一行提醒文案含全部关键标记（v1.4.0 增补变
   assert.ok(!REMINDER_TEXT.includes('\n'), '提醒必须只有一行');
 });
 
-test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+豁免（v1.5.0 改写），第 6 条含分级审查链（v1.10.0），第 11 条含分级路由（v1.4.0 新增）', () => {
-  for (let i = 1; i <= 11; i++) {
+test('CONTEXT_TEXT：十二条纪律完整，第 5 条含勘探义务+执行书+豁免（v1.5.0 改写），第 6 条含分级审查链（v1.10.0），第 11 条含分级路由（v1.4.0 新增），第 12 条含上下文账本（v1.11.0）', () => {
+  for (let i = 1; i <= 12; i++) {
     assert.ok(CONTEXT_TEXT.includes(i + ')'), '缺少第 ' + i + ' 条');
   }
   const item5 = /5\)([^]*?)6\)/.exec(CONTEXT_TEXT);
@@ -168,32 +168,32 @@ test('CONTEXT_TEXT：十一条纪律完整，第 5 条含勘探义务+执行书+
   const item6 = /6\)([^]*?)7\)/.exec(CONTEXT_TEXT);
   assert.ok(item6, '未能截取第 6 条');
   assert.ok(item6[1].includes('改动文件清单'), '第 6 条须含改动文件清单');
-  // 第 6 条（v1.10.0 分级审查链：lint 前置 + S 免审 + accept 结案路径 + diff-only 快审）
+  for (const marker of ['分级路由', '按判据定级', '单问快速通道', '禁止小改套全流程', 'docs/changes/<slug>.md', '才走全量流程', '判据不含 UI 文件']) {
+    assert.ok(CONTEXT_TEXT.includes(marker), '第 11 条缺少标记：' + marker);
+  }
+});
+
+test('CONTEXT_TEXT：第 6 条含统一 diff 审查与精简委派模板（v1.12.0），不再有快审/全审两套模式', () => {
+  const item6 = /6\)([^]*?)7\)/.exec(CONTEXT_TEXT);
+  assert.ok(item6, '未能截取第 6 条');
   for (const marker of [
-    'node scripts/review-lint.mjs',
-    '--out docs/specs/<slug>.lint-report.json',
-    'violations 必须清零',
-    'lint 硬前置',
-    'exec-missing/test-cmd-empty/lint-stale',
-    'S 级变更单 lint 干净即结案',
-    'lite-reviewed-by-lint',
-    'diff-only',
+    'v1.12.0',
+    '统一委派 reviewer 做 diff 审查',
     '禁止复跑测试',
-    '工具调用预算 ≤10',
-    '报告四段',
+    '工具调用预算 ≤12',
+    '改动文件清单',
+    '至多 3 条一行关注点',
+    '正文 ≤1500 字、条目 ≤10',
+    '不得写核对清单',
     'fast-review',
-    '<slug>-accept.md',
-    'accepted: true/slug/date/quoted',
-    'user-accepted',
     'full-review',
-    '全审模式',
-    'diff 获取方式',
-    '复审轮优先消费执行书验证清单（缺项才重跑，现场重跑≤3 项）',
+    'user-accepted',
+    '复审轮只审修复产生的增量 diff',
   ]) {
     assert.ok(item6[1].includes(marker), '第 6 条缺少标记：' + marker);
   }
-  for (const marker of ['分级路由', '按判据定级', '单问快速通道', '禁止小改套全流程', 'docs/changes/<slug>.md', '才走全量流程', '判据不含 UI 文件']) {
-    assert.ok(CONTEXT_TEXT.includes(marker), '第 11 条缺少标记：' + marker);
+  for (const stale of ['全审模式', '全审六维', '报告四段', '复审轮优先消费执行书验证清单']) {
+    assert.ok(!item6[1].includes(stale), '第 6 条仍残留旧模式表述：' + stale);
   }
 });
 

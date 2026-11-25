@@ -22,12 +22,17 @@ description: Spec-driven development gate for ANY new feature or project build r
 | `<slug>.lint-report.json` | docs/specs/ | v1.10.0 机器门禁硬前置（`node scripts/review-lint.mjs <变更单/spec> --out <路径>`，violations=0 才进入审查链；accept 标记不可豁免） |
 | `<slug>.review-report.json` | docs/specs/ | M 级变更单 / spec（L）的交付路径之一（Stop 钩子校验 verdict 为 pass 或 pass-with-issues；S 级 lint 干净即结案） |
 | `<slug>-accept.md` | docs/specs/ | v1.10.0 用户验收标记结案路径（frontmatter accepted: true / slug / date / quoted 用户原话；M 与 L 适用） |
+| `docs/context/` 账本 | 项目根 | v1.11.0 跨会话上下文：新会话首轮注入账本索引（≤1.5KB）、主会话可直写卡片、任务节点落盘、Stop 软门禁拦一次；无该目录的项目行为同 v1.10.3 |
 
 ## 七阶段流程
 
 ### 阶段 0：触发判断与分级路由（v1.4.0）
 
 收到开发需求先分级路由：**S 快速通道**（≤2 文件、净变更<30 行、无新建文件、无接口/依赖/配置变更、不涉 UI/LVGL——单问批准+变更单 `docs/changes/<slug>.md` 免任务书快审）／**M 精简四步**（单项目内功能调整，变更单加长版+单条 test-report）／**L 全量流程**（新功能/新项目/任何 UI 或 LVGL 界面变更/跨模块）；判据不含 UI 文件，涉 UI 一律 ≥M 线框或 L。路由表与 0S/0M 流程：stages-detail.md 第 1 节。用户明确要求"直接改"或仅小修小改（改文案 / typo / 常量）可跳过，项目根 `.dev-sop-skip` 临时解锁门禁；判定不清时优先按本流程处理。**断点续作**：随时 `node scripts/flow-status.mjs` 查各 slug 的阶段/已有产物/缺失产物/下一步（inject 状态判定与 accept-check 门禁谓词保持一致，有跨一致性测试锁定）。缺陷修复类需求先走阶段 0.7 缺陷定位（见 stages-detail）。
+
+### 阶段 0.5：账本读取与交接（v1.11.0）
+
+项目根存在 `docs/context/` 时（首轮注入的【上下文账本】索引即其信号），按索引以最小集 Read 卡片，**禁止一次全读五卡**：ACTIVE.md 命中本任务 → 直接接管其中状态，不重复勘探已记录内容；改造类任务补读 CODEMAP，调试先查 GOTCHAS。任务节点落盘（spec 批准 / 实现完成 / 审查通过 / 踩坑 / 关键决策 / 定稿）由主会话直接写对应卡片（gate 白名单），定稿清账：ACTIVE 清节 → 结论压入 DECISIONS → INDEX 同步。账本缺失且项目有 docs/ → 首次任务批准时按 `references/context-ledger.md` 建账本并回填本任务（历史任务不批量迁移）。细则：stages-detail.md 第 1.5 节。
 
 ### 阶段 1：需求澄清访谈（调研与访谈并行）
 
@@ -62,15 +67,15 @@ description: Spec-driven development gate for ANY new feature or project build r
 实现完成第一步**先跑机器门禁**：主会话执行 `node scripts/review-lint.mjs <变更单或 spec> --out docs/specs/<slug>.lint-report.json`（变更单任务输出到 `docs/changes/<slug>.lint-report.json`），机器项必须清零（violations=0）。规则按目标分域（v1.10.2）：**变更单**（frontmatter 有 changed-files）跑 fileset/linecap/placeholder/verify + exec-missing/test-cmd-empty/lint-stale；**spec**（只有 code-files/ui-files）只跑 exec-missing/test-cmd-empty/lint-stale。`--out` 为**整体覆盖写**（`{producedBy,slug,generatedAt,violations,warnings}`，每次只反映本次运行；v1.10.3 起含来源戳 `producedBy:"review-lint"`，accept-check 校验，缺失/错误判为"格式过期或不可信"需重跑；旧聚合结构报告同样被判定为需重跑；`lint-stale` 为 warning——报告 `generatedAt` 早于代码改动时提示重跑，重跑一次即清零）。**lint 为硬前置，任何级别、任何签字都不能豁免**——未清零先修机器项，不进 AI 审。Stop 钩子的 block 文案与真实状态一致（v1.10.3）：lint 未清零先报 lint 违规数与重跑命令，lint 已干净则只列 review-report / accept 标记路径。清零后按级别路由：
 
 - **S 级变更单**：lint 干净即结案（reason=lite-reviewed-by-lint，免 AI 审、免 review-report）；主会话可显式要求快审，仅作信息补充。
-- **M 级变更单**：委派 reviewer **快审模式**（diff-only：材料仅变更单 + lint 输出 + diff；**不复跑测试**、工具调用预算 ≤10、报告四段；复审复用执行书验证清单）；或用户在 AskUserQuestion 中确认验收后写 accept 标记结案。reviewer verdict ∈ {pass, pass-with-issues} 即放行（reason=fast-review），pass-with-issues 仍须向用户呈报后定稿。**M 级另须 `docs/changes/<slug>.test-report.json`**（records≥1 全 pass、summary.failed=0；S 级免，accept 标记不豁免）。
-- **L 级 spec（新功能/新项目/UI/跨模块/安全相关）**：委派 reviewer **全审模式**（六维现流程，与量化验收闭环同消息并发）；或用户验收后写 accept 标记结案（reason=user-accepted，即上文 full-review / user-accepted 两条路径）。委派 prompt 仍须提供任务书/规格路径、改动文件清单、diff 获取方式与报告输出路径。
-- **升档**：主会话在 prompt 显式写"全审模式"可覆盖 M 默认快审；lint 报 exec-missing / test-cmd-empty 时**必须全审**。
+- **M 级变更单**：委派 reviewer **diff 审查**；或用户在 AskUserQuestion 中确认验收后写 accept 标记结案。reviewer verdict ∈ {pass, pass-with-issues} 即放行（reason=fast-review），pass-with-issues 仍须向用户呈报后定稿。**M 级另须 `docs/changes/<slug>.test-report.json`**（records≥1 全 pass、summary.failed=0；S 级免，accept 标记不豁免）。
+- **L 级 spec（新功能/新项目/UI/跨模块/安全相关）**：同一 diff 审查模式（与量化验收闭环同消息并发）；或用户验收后写 accept 标记结案（reason=user-accepted，即上文 full-review / user-accepted 两条路径）。
+- **diff 审查与精简委派（v1.12.0，M/L 相同，取代快审/全审两套模式）**：reviewer 只审本次 diff，不跑测试、不起服务、不开浏览器，工具调用预算 ≤12，只报写得出触发条件与错误后果的 P0/P1（风格类不报，P2 ≤3 条）。委派 prompt 只给五项——取 diff 的命令或内联 diff、改动文件清单（新增/修改）、变更单或任务书路径、报告输出路径、至多 3 条一行关注点；正文 ≤1500 字、条目 ≤10（内联 diff 的代码块不计），超限由 gate 拒绝。不得写核对清单、指定命令或要求逐项给实证。
 
 **用户验收标记（accept）规范**：用户在 AskUserQuestion 中明确"验收通过/定稿"后，主会话委派一次秒级写标记（docs 白名单），生成 `docs/specs/<slug>-accept.md`（变更单任务可放 `docs/changes/<slug>-accept.md`，同 slug 任一即可），frontmatter 必须 `accepted: true` + `slug:` + `date:` + `quoted:`（**摘录用户原话**，如"确认定稿 v1.9.0"），正文可空。模板见 `references/spec-templates/accept.md`。标记与 review-report 并存以先满足者为准，不互斥；**accept 不豁免 lint 机器项**。日志记录结案路径四态之一：full-review / fast-review / lite-reviewed-by-lint / user-accepted。细则：stages-detail.md 第 8 节。
 
 ## 决策层 / 执行层分离
 
-主会话是决策层，只做需求分析、任务拆解、指令下达与结果验收；**一切文件编辑**（代码、文档、配置）通过 Agent 工具委派 code-worker 执行，指令必须写明目标文件、期望行为、验收标准，不让其自行技术决策；code-worker 阻塞汇报时主会话须先亲自分析原因再下明确指令，不得只说"继续重试"。白名单路径（`docs/specs/`、test 路径、`*.test.*`、`package.json` 等）与委派门禁/文件门禁分工：细则见 stages-detail.md 第 9 节。
+主会话是决策层，只做需求分析、任务拆解、指令下达与结果验收；**一切文件编辑**（代码、文档、配置）通过 Agent 工具委派 code-worker 执行，指令必须写明目标文件、期望行为、验收标准，不让其自行技术决策；code-worker 阻塞汇报时主会话须先亲自分析原因再下明确指令，不得只说"继续重试"。白名单路径（`docs/specs/`、`docs/context/` 账本、test 路径、`*.test.*`、`package.json` 等）与委派门禁/文件门禁分工：细则见 stages-detail.md 第 9 节。
 
 ## 执行代理
 
@@ -80,7 +85,7 @@ description: Spec-driven development gate for ANY new feature or project build r
 
 - **呈现与批准**：规格与线框在请求批准前必须把全文完整呈现在回复中（可分节展示并附路径）；批准必须用 AskUserQuestion 选项完成（批准/需修改/放弃），禁止手动输入确认；线框选项必须用 preview 展示 ASCII 图。细则见第 10 节。
 - **测试纪律**：单命令≤2 分钟（显式设 ≤120000ms timeout）、整场≤10 分钟、fail-fast 不重跑已绿、迭代只跑受影响测试、禁止后台/监听模式；任务书测试计划表之外的测试禁止执行（`hooks/test-guard.js` 强制）。细则见第 7 节与 `references/testing-rules.md`。
-- **独立审查（分级）**：`review: required` 任务先过 lint 机器门禁（`<slug>.lint-report.json` violations=0），再按级别——S 级 lint 干净结案（lite-reviewed-by-lint），M 级快审或 accept 标记，L 级全审或 accept 标记；verdict 为 pass 或 pass-with-issues（后者经用户确认）方可交付。accept 标记不豁免机器项。细则见第 8 节。
+- **独立审查（分级）**：`review: required` 任务先过 lint 机器门禁（`<slug>.lint-report.json` violations=0），再按级别——S 级 lint 干净结案（lite-reviewed-by-lint），M 级与 L 级统一 diff 审查或 accept 标记；verdict 为 pass 或 pass-with-issues（后者经用户确认）方可交付。accept 标记不豁免机器项。细则见第 8 节。
 - **冲突处理**：门禁拦截与流程要求冲突（如死锁）时，如实报告冲突详情并等待指示，禁止把"跳过流程"作为推荐选项；`.dev-sop-skip` 仅在用户明确要求时创建。
 
 ## 被门禁拦截时

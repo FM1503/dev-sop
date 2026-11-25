@@ -75,6 +75,30 @@
 3. **层内定位后按 tier 路由修复**：进入对应级别（S / M / L）的修复流程（按 1.1 路由表判据定级）。
 4. **跨层回归**：修复后改任一层必须跑相邻层的验收命令（C# ↔ WPF ↔ LVGL），防止"修一层坏一层"。
 
+## 第 1.5 节：阶段 0.5 账本读取与定稿清账（v1.11.0，规格 docs/specs/context-ledger.md）
+
+**账本结构**（`docs/context/`，每项目一份，文件均为 .md）：
+
+| 文件 | 性质 | 规则 |
+| --- | --- | --- |
+| `INDEX.md` | 索引 | 每卡一行（文件名/一句话摘要/当前行数）+ 阅读协议头；>60 行时注入提示归档 |
+| `ACTIVE.md` | 进行中任务 | 每任务一节：slug/当前阶段/下一步/关键文件指针；定稿清除该节 |
+| `DECISIONS.md` | 决策史 | 只追加（日期 slug｜背景→结论→影响）；>150 行把最旧节移 `archive/` |
+| `CODEMAP.md` | 代码结构认知 | 覆写式更新，永远反映现状；>150 行直接压缩重写 |
+| `GOTCHAS.md` | 坑与教训 | 只追加；超限归档同 DECISIONS |
+| `archive/` | 归档分卷 | `<card>-<yyyymm>.md`，日常读取不展开 |
+
+**读取协议（任务开始）**：inject 已在本会话首轮注入【上下文账本】索引块（≤1.5KB，截断时按提示直读 INDEX.md）——按索引取最小集：新任务读 ACTIVE+DECISIONS；改造任务加 CODEMAP；调试先查 GOTCHAS。**禁止一次全读五卡**。ACTIVE.md 命中本任务节 → 从该节直接接管，已记录的勘探结论不重复做。
+
+**落盘节点（主会话直写，docs/context/ 在 gate 白名单）**：
+1. spec 批准 → 建 ACTIVE 节 + INDEX 登记行（账本不存在时先从插件 `references/context-ledger.md` 模板复制骨架并回填本任务；历史任务不批量迁移，随任务增量回填）；
+2. 实现完成 / 审查通过 → 更新 ACTIVE 节阶段与下一步；
+3. 踩坑 → GOTCHAS 追加一条；关键决策 → DECISIONS 追加一条；
+4. 定稿 → ACTIVE 清节、结论压缩进 DECISIONS、INDEX 摘要行同步；超限按上表归档。
+
+**双写约定**：卡片语义由主会话负责，code-worker 不改账本文件（例外：实现任务本身受委托落盘账本骨架/模板文件）。
+**软门禁**：Stop 时若本会话有代码写入触点（gate touch 文件）且 ACTIVE.md mtime 早于该触点 → block 一次提示落盘（同会话第二次 Stop 放行）；无账本目录、无 session、任何异常一律 fail-open，行为与 v1.10.3 一致。
+
 ## 第 2 节：阶段 1 需求澄清访谈
 
 **不许臆测任何未确认的需求。** 凡是用户没有明确说过的，都必须问。
@@ -284,12 +308,21 @@ node scripts/review-lint.mjs docs/specs/<slug>.md --out docs/specs/<slug>.lint-r
 | --- | --- | --- | --- |
 | **S 级变更单** | 免 AI 审（主会话可显式要求快审，仅信息补充） | lint 干净即结案 | `lite-reviewed-by-lint` |
 | **M 级变更单** | reviewer **快审模式**（diff-only）或用户验收标记 | `docs/changes/<slug>.test-report.json` 合规（records≥1 全 pass、failed=0，accept 不豁免）**且**（review-report verdict ∈ {pass, pass-with-issues} **或** 有效 accept 标记） | `fast-review` / `user-accepted` |
-| **L 级 spec**（review: required） | reviewer **全审模式**或用户验收标记 | 同上 | `full-review` / `user-accepted` |
+| **L 级 spec**（review: required） | reviewer **diff 审查**或用户验收标记 | 同上 | `full-review` / `user-accepted` |
 
-- 快审模式（`agents/reviewer.md`"审查分级模式"）：材料仅变更单/任务书 + lint 输出 + diff；**禁止复跑测试**（采信 test-report 与执行回报，仅做断言强度抽查）；工具调用预算 **≤10** 次并在报告 summary 记录 `toolCalls` 实测数；报告四段（verdict / 问题计数 / P0-P1 明细 / P2 一行列表）。
-- **复审（第 2+ 轮）效率**：优先消费执行书的验证清单（逐条核对已列明验证项及其记录输出是否覆盖本次改动），缺项或记录与磁盘状态存疑才现场重跑，现场重跑 ≤3 项、不重复 worker 已跑通命令；summary 记 `toolCalls` / `reusedFromExecBook` / `reRanCount`，目标 ≤20 次调用。
-- 全审模式：维持六维现流程（四维 + tier 合规 + 执行书符合度），允许按测试计划表复跑关键测试。
-- **升档触发**：主会话在委派 prompt 显式写"全审模式"覆盖 M 默认快审；lint 报 `exec-missing` 或 `test-cmd-empty` 时**必须全审**；快审中发现安全相关/跨模块改动也应升档。
+- **统一 diff 审查模式（v1.12.0；M 与 L 相同，取代 v1.10.0 的快审/全审两套模式）**：reviewer 只审本次 diff（新增文件即 diff 的一部分；diff 之外的代码仅在判断改动行确需时定向读取，≤4 次），不跑测试、不起服务、不开浏览器，工具调用预算 **≤12** 次；只报写得出触发条件与错误后果的 P0/P1，风格类不报，P2 ≤3 条；核实不了的疑点进 `summary.unverified`，不计入 verdict；diff 超过约 800 行时按风险取舍并在 `summary.coverage` 写明未细看部分。定义见 `agents/reviewer.md`（`thoughtLevel: high`，工具仅 Read/Write/Bash）。
+- **委派 prompt 固定五项**（8.3 第 3 步）：取 diff 的方式、改动文件清单、变更单或任务书路径、报告输出路径、至多 3 条一行关注点。正文 ≤1500 字、条目 ≤10（围栏代码块里的内联 diff 不计），超限由 `hooks/gate.js` 拒绝并提示精简。示例：
+
+  ```
+  审查本次改动。
+  - 取 diff：git diff HEAD~1..HEAD -- src hooks test
+  - 改动文件：新增 test/a.test.js；修改 src/a.js、hooks/b.js
+  - 变更单：docs/changes/<slug>.md（验收标准在此，按需读）
+  - 报告输出：docs/changes/<slug>.review-report.json
+  - 关注点：b.js 的重试计数在超时分支是否清零
+  ```
+
+- **复审轮**只审修复产生的增量 diff，同样受预算与清单上限约束。审查报告 `summary` 记 `toolCalls`、`coverage`、`unverified`、`outOfScope`。**升档**：不再有"全审模式"；lint 报 `exec-missing` 或 `test-cmd-empty` 时先补齐执行证据再委派。
 
 ### 8.2 用户验收标记（accept，v1.10.0 新结案路径）
 
@@ -321,9 +354,9 @@ node scripts/review-lint.mjs docs/specs/<slug>.md --out docs/specs/<slug>.lint-r
 
 1. **实现完成**：code-worker 完成实现并自审通过（第 7 节全部完成，验收测试报告 test-report 合规）；量化验收（ui-report）不作为本步前置——它与审查并行，由第 3 步的量化闭环产出，闭环回报后由主会话复核；
 2. **冻结基线**：主会话本地 WIP commit 冻结基线（并行发起的前置动作，见上方冻结与增量 diff 语义）；
-3. **同消息并发委派 reviewer + 量化闭环**：主会话在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer` + `code-worker`（第 5 节量化验收自动闭环）。reviewer 委派 prompt 必须提供：任务书路径（`docs/tasks/<slug>.md`）、规格路径（`docs/specs/<slug>.md`）、**改动文件清单**（区分新增/修改）、**获取 diff 的方式**（`git diff HEAD~1..HEAD`，或主会话指明 range）、报告输出路径（`docs/specs/<slug>.review-report.json`）——reviewer 按 diff 优先策略审查（见 `agents/reviewer.md` 输入约定）；**v1.8.0 机器预检前置**：审查先跑 `node scripts/review-lint.mjs <变更单> [--diff-cmd "git diff"]`（文件集⊆changed-files / 净变更行数 tier 上限 / TODO-FIXME-XXX 占位 / 验证命令断言与 timeout 四类机器项），机器项清零后仅做语义四维（符合度/缺陷/安全性能/测试）；lint 违规清单原样并入审查输入，不得带机器违规出 verdict；该委派属**验收类委派**（输出 review-report），gate 自动豁免执行书要求（v1.5.1），改动文件清单含代码文件也不会被拦；收到执行回报后，快审与主会话只读冒烟同时间片并行发起，结果合并呈报（冒烟∥快审，v1.6.0）；
+3. **同消息并发委派 reviewer + 量化闭环**：主会话在**同一条消息**里并发两个 Agent 调用——`dev-sop:reviewer` + `code-worker`（第 5 节量化验收自动闭环）。reviewer 委派 prompt **只给五项**：取 diff 的方式（`git diff HEAD~1..HEAD`，或主会话指明 range；也可把 diff 放进围栏代码块内联给出）、改动文件清单（区分新增/修改）、变更单或任务书路径（背景与验收标准写在这里，不复制进 prompt）、报告输出路径（`docs/specs/<slug>.review-report.json`）、至多 3 条一行关注点（可空）。**不得**写步骤化核对清单、指定要跑的命令或要求逐项给实证——正文超过 1500 字或条目超过 10 时 gate 直接拒绝该委派并提示精简（围栏代码块里的内联 diff 不计入）。reviewer 只审 diff（范围、预算与报告标准见 `agents/reviewer.md` 与 8.1）；该委派属**验收类委派**，gate 自动豁免执行书要求（v1.5.1）；
 4. **增量快检**：量化闭环回报后，主会话用 `git diff HEAD`（查看相对冻结基线的全部工作区改动）快检闭环修复产生的增量 diff；仅当 reviewer 报告 **P0/P1** 级问题时，才追加**一轮增量快审**（diff 优先，仅审增量改动）；**P2** 级问题直接记 backlog，不追加审查轮次；
-5. **verdict 处置（fail→修复循环 / pass-with-issues→用户确认）**：reviewer 按四维度（对照任务书符合度 / 缺陷与边界 / 安全与性能 / 测试质量）审查并写入报告后，主会话回读该报告——verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；修复后重新委派 reviewer 审查（新报告覆盖旧报告），最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**——不强制进入修复循环；
+5. **verdict 处置（fail→修复循环 / pass-with-issues→用户确认）**：reviewer 按 diff 审查标准（`agents/reviewer.md`）写完报告后，主会话回读该报告——verdict 为 `fail` 时，主会话将问题清单 + reviewer 建议整理成修复指令，委派 code-worker 修复；修复后重新委派 reviewer 只审修复增量（新报告覆盖旧报告），最多 2 轮修复重审，仍为 `fail` 则如实向用户呈报遗留问题清单请用户仲裁，**禁止把"跳过审查"作为推荐选项**；verdict 为 `pass-with-issues` 时，用 AskUserQuestion 向用户呈报问题清单（含 reviewer 建议与遗留风险），由用户决定**带问题定稿**或**继续修复**——不强制进入修复循环；
 6. **定稿**：verdict 为 `pass` 时，用 AskUserQuestion 向用户呈报 verdict + 问题清单摘要，用户确认后方可定稿（继续修 / 定稿）；`pass-with-issues` 经用户确认（带问题定稿 / 继续修复）后方可定稿。
    定稿发布时必须同步：①更新仓库根 CHANGELOG.md（版本/日期/变更摘要/已知问题）②git 提交信息引用版本号 ③打 tag v<版本> 并随 main 推送。
 
